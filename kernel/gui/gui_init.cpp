@@ -105,7 +105,7 @@ namespace {
 struct ShellLaunchInfo {
     cinux::fs::Inode* stdin_read;
     cinux::fs::Inode* stdout_write;
-    const char* path;
+    const char*       path;
 };
 
 /// Entry function for shell child tasks.  Runs on a clean kernel stack
@@ -121,14 +121,14 @@ static void shell_child_entry() {
 
     task->fd_table = new cinux::fs::FDTable();
     task->fd_table->set(0, new cinux::fs::File(info->stdin_read, 0, cinux::fs::OpenFlags::RDONLY));
-    task->fd_table->set(1, new cinux::fs::File(info->stdout_write, 0, cinux::fs::OpenFlags::WRONLY));
+    task->fd_table->set(1,
+                        new cinux::fs::File(info->stdout_write, 0, cinux::fs::OpenFlags::WRONLY));
 
     const char* argv[] = {info->path, nullptr};
     const char* envp[] = {nullptr};
-    auto result = cinux::proc::execve(info->path, argv, envp);
+    auto        result = cinux::proc::execve(info->path, argv, envp);
     if (result != cinux::proc::ExecveResult::Ok) {
-        cinux::lib::kprintf("[GUI] execve(%s) failed: %d\n", info->path,
-                            static_cast<int>(result));
+        cinux::lib::kprintf("[GUI] execve(%s) failed: %d\n", info->path, static_cast<int>(result));
         cinux::proc::Scheduler::exit_current();
     }
 
@@ -231,13 +231,13 @@ void create_shell_terminal() {
     }
 
     // PID + parent/child linkage (TaskBuilder handles TCB + stack only)
-    child->pid       = cinux::proc::g_pid_alloc.alloc();
+    child->pid          = cinux::proc::g_pid_alloc.alloc();
     child->private_data = info;
-    auto* parent     = cinux::proc::Scheduler::current();
-    child->ppid      = parent->pid;
-    child->parent    = parent;
-    child->wait_next = parent->children;
-    parent->children = child;
+    auto* parent        = cinux::proc::Scheduler::current();
+    child->ppid         = parent->pid;
+    child->parent       = parent;
+    child->wait_next    = parent->children;
+    parent->children    = child;
 
     cinux::proc::Scheduler::add_task(child);
 
