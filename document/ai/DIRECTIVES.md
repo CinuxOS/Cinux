@@ -22,7 +22,7 @@
 - **L2 提交信息** `<type>(<scope>): <中文简述>`——纯描述变更（里程碑/批归属由 PLAN.md 的 commit 列跟踪，不入 commit msg），**不带 Co-Authored-By 或任何 AI 署名 trailer**。
 - **L3 propose-then-execute**：新里程碑/跨子系统大改，先出草案等确认；已确认的批内可自主推进。
 - **L4 改前查牵连**：改任何模块或文档前，grep 引用方与依赖；ROADMAP/PLAN/`document/todo`/git 状态变更需同步，降不一致。
-- **L5 验证只用 `run-kernel-test`**；`run`(GUI 无断言)/`test_host`(host mock 不跑真内核)/`make run` 均非验证。
+- **L5 验证**：内核改动用 `run-kernel-test`（QEMU 真内核 ~662 项，首选）；`run`/`make run`(GUI 无断言)非验证。**CI 对等盲区**：`run-kernel-test` 不编译 `test/unit/` host 单测（host mock，不跑真内核），而 CI 的 host-tests job 另跑 `make test_host` 当构建门禁——改公共接口/`InodeOps`/被 mock 的类后，push 前补 `cmake --build build -j$(nproc)`（全量，含 host 编译）或 `make test_host`，否则 host 单测破了本地 run-kernel-test 抓不到（批2b 教训，2026-06）。
 - **L6 省 token**：命令与文档保持紧凑，不堆仪式；`CLAUDE.md` 常驻须薄，重内容按需读。
 - **L7 编译并行**：所有 `cmake --build` 都带 `-j$(nproc)`（本机 14 核）；验证即 `cmake --build build --target run-kernel-test -j$(nproc)`，大幅省编译时间。
 - **L8 开发日志**：每批 / 每个有意义的迭代，`/done` 自动追加 `DEVLOG.md`（最新在最上；粗略代码改动 + 决策 why + 弯路 + 验证），编年叙事，条目写定不改。
