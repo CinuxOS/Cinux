@@ -10,17 +10,21 @@
 |----|------|------|--------|------|
 | 批1 | FileSystem::mount/lookup → ErrorOr<void>/ErrorOr<Inode*> | ✅ | 93e2870 | 662/0 ×2 |
 | 批2a | InodeOps::create/mkdir/unlink/stat → ErrorOr | ✅ | 93e2870 | 662/0 ×2 |
-| 批2b | InodeOps::read/write/readdir → ErrorOr<int64_t> | ✅ | — | 662/0 |
-| 批3 | proc 子系统 ErrorOr 化 | 🔄 NEXT | — | — |
-| 批4 | syscall 边界 ErrorOr→int 翻译(errno 映射) | ⏳ | — | — |
-| 收尾 | 文档(本文+document/todo) + 全量 run-kernel-test | ⏳ | — | — |
+| 批2b | InodeOps::read/write/readdir → ErrorOr<int64_t> | ✅ | 6d47c99 | 662/0 |
+| 批3 | ~~proc ErrorOr 化~~ 侦察：无高价值目标（见 NEXT） | ⏭️ 并入批4 | — | — |
+| 批4 | syscall 边界 Error→errno 翻译（接回 userspace） | ✅ | — | 662/0 |
+| 收尾 | 文档(本文+document/todo) + 全量 run-kernel-test | 🔄 NEXT | — | — |
 
-最近提交：`—`(2026-06-15) `refactor(fs): read/write/readdir 迁移 ErrorOr<int64_t> (M0 批2b)`，20 files +169−115。commit hash 待回填。
+最近提交：`—`(2026-06-15) `refactor(syscall): 引入 to_errno，syscall 失败返回 -errno 而非 -1 (M0 批4)`，16 files（新 `kernel/errno.hpp` + 10 handler + 4 test）。commit hash 待回填。
 
-## NEXT — 批3：proc 子系统 ErrorOr 化
-范围：proc 子系统（execve 返回 `ExecveResult`、fork/scheduler/信号等仍用裸 int/bool 表错误）迁移到 `ErrorOr`，为批4（syscall errno 翻译）铺路。
-侦察（`/next 批3` 时细化）：grep `kernel/proc/` 错误返回点；注意 execve.cpp 已用 `ExecveResult` 枚举，批3/批4 须决定是否统一映射到 `ErrorOr<ExecveResult>` 或保留枚举在边界翻译。
-完成门：`cmake --build build --target run-kernel-test -j$(nproc)` 全绿。提交：`refactor(proc): ... 迁移 ErrorOr`，无 Co-Auth。
+## NEXT — 收尾：文档 + 全量验证
+范围：① 回填本批 commit hash；② `document/todo` 同步 M0 状态；③ 全量 `run-kernel-test` 复跑确认无回归。M0（ErrorOr 消费迁移）至此收口——FS 层（批1/2a/2b）已返回 ErrorOr，syscall 边界（批4）已 `Error→errno` 接回用户态；proc 边界类型（execve/waitpid/fork）按批3 侦察结论保留 errno-encoded 形态，不强行 ErrorOr 化。
+
+## 批4 落地纪要
+- 新建 `kernel/errno.hpp`：`cinux::to_errno(Error)` 全 14 变体映射 + `kPascalCase` POSIX errno 常量（freestanding，不引 libc `<errno.h>`）。
+- 10 个 FS handler 的失败路径由 `return -1` 统一改为：ErrorOr 失败 `return -to_errno(r.error())`，非 ErrorOr 路径按 POSIX 语义赋值（ptr→`-kEfault`、bad fd→`-kEbadf`、not-found→`-kEnoent`、fd 满→`-kEmfile`、not-dir→`-kEnotdir`、dir 非空→`-kEnotempty`…）。
+- execve/waitpid/fork 边界保持 errno-encoded 枚举/值（不经 `to_errno`）；sys_close/sys_pipe 等 非-FS-ErrorOr handler 本批未动（其 `return -1` 与对应测试保留）。
+- 受影响测试断言 `== -1` → `TEST_ASSERT_LT(..., 0)`（test_vfs_syscall 18 处、test_cwd_stat 4 处、test_syscall 4 处、test_shell 2 处）；sys_close 的断言保留 `== -1`。
 
 ## OPEN GOTCHAS
 1. **readdir 三态歧义**：现返回 正数=一个条目 / `0`=读完(正常) / `-1`=错误。改 ErrorOr 后 `sys_getdents`/`sys_rmdir` 循环终止条件须逐处核对，别把"读完"误判成错误。 ✅ **批2b 已验证**：value==0 作 OK(读完)、`!ok` 作错误；sys_getdents/sys_rmdir 终止条件逐处核对通过，662 测试全绿。
@@ -29,6 +33,9 @@
 4. **批4 是翻译层**：ErrorOr 不泄到用户 ABI。
 5. **grep 调用方须覆盖两种形态**：`->ops->op(obj,…)` 指针形态 **和** `ops_obj.op(…)` 对象点号形态（如 `test_pipe.cpp` 的 `read_ops.read(…)` 局部 PipeReadOps 对象）。批2b 侦察只 grep 了箭头形态，漏掉点号形态，靠编译才暴露——下次先两种都 grep。
 6. **`pipe_ops` 是 PLAN 易漏项**：`PipeReadOps`/`PipeWriteOps` 也是 `InodeOps` 子类，改基类签名必同步改（否则 override 编译断）。适配层须把 `Pipe::read/write` 的 `-1` 翻译成 `Error`，不可直接 `return pipe_->read()`（否则 -1 被包成 OK-with-(-1)）。
+7. **批3 侦察结论（为何并入批4）**：proc 无高价值 ErrorOr 迁移目标——execve/waitpid 已用结构化 errno-enum（保真高于 `ErrorOr<void>+Error`，因 `Error` 枚举缺 ENOEXEC/EISDIR/ECHILD/ESRCH），fork 错误全平凡（6×OOM+1×invariant，sentinel `-1` 已够且 ErrorOr 反而压掉 7 条区分性 kprintf），`handle_cow_fault` 是谓词非错误通道。**且 fork 迁 ErrorOr 会撞 `fork_child_trampoline`**：现 `xorq %rax,%rax` 锻造子进程 fork()=0（int），改 `ErrorOr<int>` 后 rax=0 使 `is_ok_=0`→child 误判失败，须改 `movq $0x100000000,%rax` 锻造 `{value=0,ok}`——asm 耦合 C++ 布局，纯成本零收益。故 proc 边界类型留批4 syscall errno 层统一处理。
+8. **批4 errno 双源**：`cinux::proc::errno_values`（process.hpp，~8 常量，2 个 test 引用）与批4 新建的 `to_errno` 表是两套。批4 让 `to_errno` 自包含（自带全 POSIX errno 常量），**不动** `errno_values`/不碰 proc 测试；两源归一是可选后续清理，不在 M0 范围。
+9. **grep 受影响测试断言须不限变量名**（批4 教训）：改 handler 返回值后，找受影响测试断言别用 `[a-z_]*` 之类限定变量名的正则——会漏掉带数字的变量名（`r0`/`r1`/`result2`，正好是 sys_write 测试用的）。正解：`grep -rn "TEST_ASSERT_[A-Z]*(.\{0,60\}, *-1)" kernel/test/*.cpp` 列出**全部** `-1` 断言，再逐条分类（changed handler 改 `< 0`，dispatch/Pipe/Ramdisk/InodeOps-helper/sys_pipe/proc-枚举保留）。批4 首轮漏掉 `r0/r1` 导致 4 failed，第二轮补 grep 才补齐。
 
 ## M0 基础设施笔记（跨批 2b/3/4 复用）
 - 测试 helper `kernel/test/big_kernel_test.h`：`lookup_or_null`/`create_or_null`/`mkdir_or_null`/`unlink_rc` 把 ErrorOr 降级回 nullptr/0-1 以适配旧 `TEST_ASSERT_*`；批量改造用 Python 正则。
