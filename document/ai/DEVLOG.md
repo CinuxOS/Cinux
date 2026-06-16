@@ -15,6 +15,24 @@
 
 <!-- 新条目插在此行下方（最新在最上） -->
 
+## 2026-06-16 M1 收尾 — RingBuffer 消费迁移完成
+- 改动：批1（pipe）+ 批2（keyboard）两处 kernel/ 手写环形缓冲统一复用 `cinux::lib::RingBuffer`；ROADMAP F1-M1 ⏳→✅、PLAN 进入待命。
+- 决策/why：M1 与 M0 同构——Cinux-Base 既有类型就绪，工作是消费迁移而非造轮子。这是「层化」铁律的兑现：kernel/ 消费 cinux::lib，不在 kernel/ 重写。净减代码、消除两套同款环形缓冲逻辑。
+- 陷阱/弯路：迁移前发现 ROADMAP 把 M1 标成「RingBuffer ⏳」误导成待实现，实则 Cinux-Base 早已提供（README 列为 4 大容器之一、文档明写"用于日志和管道"）——里程碑定义应区分「类型就绪」与「内核消费」，已据此修正 ROADMAP/PLAN 描述。
+- 验证：全量 run-kernel-test 662/0；批1 另跑 host test_pipe 37/0 + test_sys_pipe 13/0。
+
+## 2026-06-16 批2 — keyboard 事件队列迁移至 cinux::lib::RingBuffer (commit 715a00f)
+- 改动：[`keyboard.{hpp,cpp}`](../../kernel/drivers/keyboard/keyboard.cpp) 移除手写 `queue_[64]/head_/tail_`（牺牲槽位策略：head_==tail_ 判空、next==head_ 判满）及 enqueue/poll 逻辑，复用 `RingBuffer<KeyEvent,KEY_QUEUE_SIZE>` 的 `push/pop`；静态存储收敛为 `buf_`，init 重置用 `clear()`。
+- 决策/why：与批1 同理。原队列牺牲槽位（容量 63），RingBuffer 用 count_ 不牺牲（容量 64），更贴合 KEY_QUEUE_SIZE 字面；enqueue 满 drop-newest 由 `push` 返 false 实现，InterruptGuard 同步保留。公共接口（init/irq1_handler/poll）签名不变 → sys_read/gui/main 等调用方零波及。
+- 陷阱/弯路：IDE 在多 Edit 应用过程中报 queue_/head_/tail_ 未定义 Error——中间 Edit 快照噪音（hpp 已删成员但 cpp 后续 Edit 未反映），全 Edit 应用后消失，编译一次过。test_keyboard 是 QEMU in-kernel 测试（非 host），验证只需 run-kernel-test。
+- 验证：run-kernel-test 662/0（test_keyboard 13 项 + dual_path 全过）。
+
+## 2026-06-16 批1 — pipe 内部环形缓冲迁移至 cinux::lib::RingBuffer (commit 0746ebf)
+- 改动：[`kernel/ipc/pipe.{hpp,cpp}`](../../kernel/ipc/pipe.cpp) 移除手写 `buffer_[4096]/head_/tail_/count_` 及 write/read/try_read/try_write 的两段回绕拷贝，改用 Cinux-Base `RingBuffer<char,4096>` 的 `push_batch/pop_batch`；私有存储收敛为单个 `buf_`。外层 `Spinlock` + `irq_save/restore` + spin-wait + reader/writer open 标志位原样保留。
+- 决策/why：M1 是 M0 同款「消费迁移」——`RingBuffer` 类型 Cinux-Base 早已提供（freestanding header-only，文档明写"用于日志和管道"），内核却手写了一套几乎同款（连用 `count_` 区分满空的策略都一致）。故本里程碑不是造轮子，而是消灭 kernel/ 重复实现，回归「kernel 消费 cinux::lib」层化铁律。只换存储层、不动公共接口 → pipe_ops 与 syscall 边界零影响。
+- 陷阱/弯路：RingBuffer 的 `push_batch/pop_batch` 返 `size_t`（新增 size_t 依赖，IDE 报 IWYU，补 `<stddef.h>`）；它非线程安全，靠外层锁保护——正好契合 pipe 既有模型。read 返回的 `writer_open_ ? 0 : 0`（两分支皆 0）是历史形态，保留不"修"。净减 ~109 行。
+- 验证：run-kernel-test 662/0；host test_pipe 37/0 + test_sys_pipe 13/0（含 try 往返/partial/满空/EOF/多轮回绕全覆盖）。
+
 ## 2026-06-15 批4 — syscall 边界 Error→errno，接回 userspace (commit a81536a)
 - 改动：新建 [`kernel/errno.hpp`](../../kernel/errno.hpp)（`cinux::to_errno(Error)` 全 14 变体映射 + `kPascalCase` POSIX errno 常量，freestanding 不引 libc errno.h）；10 个 FS syscall handler（open/read/write/stat/creat/mkdir/unlink/rmdir/getdents/chdir）失败路径由 `return -1` 改为 `return -to_errno(r.error())` 或具体 `-errno`（EFAULT/EBADF/ENOENT/EMFILE/ENOTDIR/ENOTEMPTY…）；28 处受影响测试断言 `== -1` → `< 0`。
 - 决策/why：**批3 侦察后并入批4**——proc 无高价值 ErrorOr 目标（execve/waitpid 已是 errno-enum、保真高于 `ErrorOr<void>+Error`，因 `Error` 缺 ENOEXEC/EISDIR/ESRCH；fork 错误全平凡且 ErrorOr 撞 `fork_child_trampoline` 的 rax 锻造；`handle_cow_fault` 是谓词非错误通道）。故 M0 收口落在 syscall 边界：批1/2a/2b 让 FS 返 ErrorOr，批4 把 `Error` 经 `to_errno` 翻成 `-errno` 接回用户态——批1/2a/2b 的投资此前在边界被压成 `-1` 丢弃。
