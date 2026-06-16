@@ -68,6 +68,7 @@ void run_multi_terminal_tests();
 void run_kprintf_format_tests();
 void run_concurrent_ring_buffer_tests();
 void run_klog_tests();
+void run_sys_dmesg_tests();
 }
 
 static constexpr uintptr_t BOOT_INFO_PHYS = 0x7000;
@@ -133,6 +134,7 @@ extern "C" void kernel_main() {
     run_sync_concurrent_tests();
     run_concurrent_ring_buffer_tests();
     run_klog_tests();
+    run_sys_dmesg_tests();
 
     cinux::arch::usermode_init();
     run_usermode_tests();

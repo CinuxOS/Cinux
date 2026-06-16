@@ -161,6 +161,7 @@ add_executable(big_kernel_test
     test/test_kprintf_format.cpp
     test/test_concurrent_ring_buffer.cpp
     test/test_klog.cpp
+    test/test_sys_dmesg.cpp
 )
 
 target_sources(big_kernel_test PRIVATE $<TARGET_OBJECTS:big_kernel_common>)
