@@ -23,9 +23,9 @@
 #include <cinux/expected.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 
 #include "kernel/drivers/block_device.hpp"
+#include "kernel/lib/string.hpp"
 #include "kernel/mm/heap.hpp"
 
 namespace cinux::drivers {

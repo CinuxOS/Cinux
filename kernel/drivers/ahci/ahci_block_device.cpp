@@ -7,9 +7,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 
 #include "kernel/drivers/dma/dma_pool.hpp"
+#include "kernel/lib/string.hpp"
 
 namespace cinux::drivers::ahci {
 

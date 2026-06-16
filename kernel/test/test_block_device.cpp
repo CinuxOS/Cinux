@@ -11,10 +11,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "big_kernel_test.h"
 #include "kernel/drivers/ram_block_device.hpp"
+#include "kernel/lib/string.hpp"
 
 using cinux::drivers::IBlockDevice;
 using cinux::drivers::RAMBlockDevice;
