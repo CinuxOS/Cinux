@@ -79,7 +79,7 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
 | 批1 | `vma.hpp/cpp`：`VmaFlags` + `VMA` 结构体 + `IVMAStore` 抽象 + `LinkedListVMAStore`（insert 有序+合并 / find / remove 拆分 / find_free_area）+ 单测 | ✅ | — | 710/0（+5） |
-| 批2 | `AddressSpace` 持 `IVMAStore*` + spinlock（构造建 / 析构清）+ `memory_layout.hpp` 加 `USER_MMAP_BASE/END`、`USER_BRK_BASE/MAX` | ⏳ | — | — |
+| 批2 | `AddressSpace` 持 `LinkedListVMAStore`+`Spinlock` 成员（`vmas()`/`vma_lock()` 访问器，构造建/析构 RAII）+ `LinkedListVMAStore` 补 move（AddressSpace move-only 需成员可 move）+ `memory_layout` 加 `USER_BRK`/`MAP` 常量（按实际栈顶≈32GB 校正，非 todo 127TB） | ✅ | — | 712/0（+2） |
 | 批3 | execve ELF 段 + 用户栈映射 **注册 VMA**（账本反映已有映射） | ⏳ | — | — |
 | 批4 | PF handler 接 `find()`：无 VMA→真 segfault / Stack VMA→自动下扩栈（**不干扰 CoW**）+ 收尾(ROADMAP/PLAN/todo/notes) + **实机冒烟** | ⏳ | — | — |
 

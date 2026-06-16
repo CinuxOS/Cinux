@@ -143,6 +143,12 @@ public:
     LinkedListVMAStore(const LinkedListVMAStore&)            = delete;
     LinkedListVMAStore& operator=(const LinkedListVMAStore&) = delete;
 
+    // Move transfers ownership of every node; the source is left empty so its
+    // destructor frees nothing.  Required because AddressSpace (which holds a
+    // store by value) is itself move-only.
+    LinkedListVMAStore(LinkedListVMAStore&& other) noexcept;
+    LinkedListVMAStore& operator=(LinkedListVMAStore&& other) noexcept;
+
     cinux::lib::ErrorOr<void>     insert(uint64_t start, uint64_t end, VmaFlags flags) override;
     cinux::lib::ErrorOr<void>     remove(uint64_t start, uint64_t end) override;
     VMA*                          find(uint64_t addr) override;

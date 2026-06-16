@@ -60,6 +60,23 @@ void LinkedListVMAStore::clear() {
     count_ = 0;
 }
 
+LinkedListVMAStore::LinkedListVMAStore(LinkedListVMAStore&& other) noexcept
+    : head_(other.head_), count_(other.count_) {
+    other.head_  = nullptr;
+    other.count_ = 0;
+}
+
+LinkedListVMAStore& LinkedListVMAStore::operator=(LinkedListVMAStore&& other) noexcept {
+    if (this != &other) {
+        clear();
+        head_        = other.head_;
+        count_       = other.count_;
+        other.head_  = nullptr;
+        other.count_ = 0;
+    }
+    return *this;
+}
+
 cinux::lib::ErrorOr<void> LinkedListVMAStore::insert(uint64_t start, uint64_t end, VmaFlags flags) {
     if (start >= end || !page_aligned(start) || !page_aligned(end)) {
         return cinux::lib::Error::InvalidArgument;
