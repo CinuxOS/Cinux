@@ -45,6 +45,7 @@ void run_ramdisk_tests();
 void run_vfs_syscall_tests();
 void run_ext2_tests();
 void run_ahci_write_tests();
+void run_ahci_block_device_tests();
 void run_ext2_allocator_tests();
 void run_ext2_ops_tests();
 void run_ext2_inode_ops_tests();
@@ -177,6 +178,9 @@ extern "C" void kernel_main() {
 
     // AHCI write + ext2 write_block tests (028b): write round-trip, write_block
     run_ahci_write_tests();
+
+    // AHCI block device adapter (M4-2): IBlockDevice over real AHCI hardware
+    run_ahci_block_device_tests();
 
     // Ext2 allocator tests (028b): alloc_block, free_block, alloc_inode, free_inode
     run_ext2_allocator_tests();
