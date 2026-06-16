@@ -71,6 +71,7 @@ void run_klog_tests();
 void run_sys_dmesg_tests();
 void run_dma_buffer_tests();
 void run_dma_pool_tests();
+void run_prdt_builder_tests();
 }
 
 static constexpr uintptr_t BOOT_INFO_PHYS = 0x7000;
@@ -141,6 +142,7 @@ extern "C" void kernel_main() {
     // DMA tests (M3): DmaBuffer value type (M3-1) + DmaPool allocator (M3-2)
     run_dma_buffer_tests();
     run_dma_pool_tests();
+    run_prdt_builder_tests();
 
     cinux::arch::usermode_init();
     run_usermode_tests();
