@@ -13,6 +13,7 @@
 #include "kernel/arch/x86_64/memory_layout.hpp"
 #include "kernel/arch/x86_64/paging_config.hpp"
 #include "kernel/drivers/dma/dma_pool.hpp"
+#include "kernel/drivers/dma/prdt_builder.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/vmm.hpp"
 
@@ -233,16 +234,24 @@ bool AHCI::execute_command(uint8_t port_index, uint8_t slot, bool write_cmd, uin
     // Build the Command FIS
     build_cfis(cmd_tbl, write_cmd, lba, count);
 
-    // Set up the PRDT (single entry for contiguous buffer)
-    uint32_t byte_count   = static_cast<uint32_t>(count) * SECTOR_SIZE - 1;
-    cmd_tbl->prdt[0].dba  = static_cast<uint32_t>(buf_phys & 0xFFFFFFFF);
-    cmd_tbl->prdt[0].dbau = static_cast<uint32_t>(buf_phys >> 32);
-    cmd_tbl->prdt[0].dbc  = byte_count & 0x3FFFFF;  // 22-bit max
-    cmd_tbl->prdt[0].i    = 1;                      // Interrupt on completion
+    // Build the PRDT via the device-independent PrdtBuilder (splits at the AHCI
+    // 22-bit per-segment cap; a single contiguous buffer yields one entry).
+    constexpr uint64_t kAhciMaxSegment = 0x400000;  // 4 MB (PRDT dbc is 22-bit)
+    cinux::drivers::dma::PrdtBuilder<MAX_PRDT_ENTRIES> prdt;
+    uint64_t transfer_bytes = static_cast<uint64_t>(count) * SECTOR_SIZE;
+    prdt.add(buf_phys, transfer_bytes, kAhciMaxSegment);
+
+    for (uint32_t i = 0; i < prdt.count(); ++i) {
+        const auto& seg       = prdt.segment(i);
+        cmd_tbl->prdt[i].dba  = static_cast<uint32_t>(seg.phys & 0xFFFFFFFF);
+        cmd_tbl->prdt[i].dbau = static_cast<uint32_t>(seg.phys >> 32);
+        cmd_tbl->prdt[i].dbc  = static_cast<uint32_t>((seg.size - 1) & 0x3FFFFF);
+        cmd_tbl->prdt[i].i    = (i + 1 == prdt.count()) ? 1 : 0;  // IRQ on last entry
+    }
 
     // Configure the command header
     headers[slot].cfl   = sizeof(RegH2DFIS) / 4;  // FIS length in dwords
-    headers[slot].prdtl = 1;                      // One PRDT entry
+    headers[slot].prdtl = static_cast<uint16_t>(prdt.count());
     headers[slot].write = write_cmd ? 1 : 0;
     headers[slot].ctba  = static_cast<uint32_t>(cmd_tbl_phys & 0xFFFFFFFF);
     headers[slot].ctbau = static_cast<uint32_t>(cmd_tbl_phys >> 32);
