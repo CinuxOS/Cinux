@@ -160,6 +160,7 @@ add_executable(big_kernel_test
     test/test_multi_terminal.cpp
     test/test_kprintf_format.cpp
     test/test_concurrent_ring_buffer.cpp
+    test/test_klog.cpp
 )
 
 target_sources(big_kernel_test PRIVATE $<TARGET_OBJECTS:big_kernel_common>)
