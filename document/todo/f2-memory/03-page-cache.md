@@ -1,5 +1,7 @@
 # M4: Page Cache
 
+> ✅ 已实现 2026-06-17（最小 MVP：读路径；3 批，722→730，Test A cache 真盘读 + Test B PF round-trip 端到端验证）。实际范围/决策以 `document/ai/PLAN.md` F2-M4 节 + `document/notes/2026-06-17-f2-m4-page-cache.md` 为准；下为原始静态草案（writeback / 全 read() 经缓存 / NX（待 F9 NXE）等未做）。
+
 > 基于 inode + offset 的哈希表页缓存。
 > 缓存文件内容的内存页，为文件映射（mmap）和文件系统性能优化提供基础。
 

@@ -221,9 +221,8 @@ int64_t sys_mprotect(uint64_t addr, uint64_t length, uint64_t prot, uint64_t, ui
     if ((prot & PROT_WRITE) != 0) {
         pte_flags |= cinux::arch::FLAG_WRITABLE;
     }
-    if ((prot & PROT_EXEC) == 0) {
-        pte_flags |= cinux::arch::FLAG_NX;
-    }
+    // NX deferred until EFER.NXE is enabled (F9 NX/SMEP/SMAP): bit 63 is
+    // reserved now and would cause a reserved-bit #PF on access.
     for (uint64_t v = addr; v < addr + aligned_len; v += kPageSize) {
         const uint64_t phys = task->addr_space->translate(v);
         if (phys != 0) {

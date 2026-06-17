@@ -285,9 +285,9 @@ void handle_pf(InterruptFrame* frame) {
                     if (cinux::mm::has_flag(vma->flags, cinux::mm::VmaFlags::Write)) {
                         fflags |= cinux::arch::FLAG_WRITABLE;
                     }
-                    if (!cinux::mm::has_flag(vma->flags, cinux::mm::VmaFlags::Exec)) {
-                        fflags |= cinux::arch::FLAG_NX;
-                    }
+                    // NX (bit 63) is reserved until EFER.NXE is enabled (F9
+                    // NX/SMEP/SMAP): setting it now triggers a reserved-bit #PF
+                    // on access, so non-exec file pages are not marked NX yet.
                     uint64_t cur_cr3 = cinux::arch::read_cr3();
                     if (g_vmm.map_nolock(virt_page, gp.value()->phys, fflags, &cur_cr3)) {
                         kprintf("[VMM] File demand-read %p -> phys %p\n",
