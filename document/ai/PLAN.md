@@ -131,7 +131,7 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
 | 批1 | `page_cache.hpp/cpp`（`CachedPage`+`PageCache` 256-bucket hash，`lookup`/`get_page` 填充+EOF 零填/`release`/stats，`ErrorOr`，irq-guard Spinlock，direct-map virt）+ fake `InodeOps` mock + `test_page_cache.cpp` 单测（命中/未命中填充/refcount/同 inode+offset 二次命中/EOF 零填） | ✅ | — | 728/0（+6） |
-| 批2 | `handle_pf` 文件感知（file-backed VMA→`get_page`→`map_nolock`；PTE 权限按 VmaFlags 翻译 Write/NX；读锁外 insert 锁内）+ 匿名路径不变 | ⏳ | — | — |
+| 批2 | `handle_pf` 文件感知（file-backed VMA→`get_page`→`map_nolock`；PTE 权限按 VmaFlags 翻译 Write/NX；读锁外 insert 锁内）+ 匿名路径不变 | ✅ | — | 728/0（回归；文件路径单测 dormant，真机锻炼留批3） |
 | 批3 | 真文件 mmap 闭环（ext2 已知文件 round-trip 字节比对，走 cache→Ext2FileOps::read→AHCI）+ 实机冒烟 + 收尾（ROADMAP/PLAN/todo/notes + 全量 run-kernel-test + host 全量编译，fake InodeOps 触 CI test_host） | ⏳ | — | — |
 
 ## OPEN GOTCHAS（跨里程碑通用，活警告）

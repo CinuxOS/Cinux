@@ -77,6 +77,11 @@ int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, 
             return -kEbadf;
         }
         backing_inode = file->inode;
+        // File mappings need a page-aligned offset: the page cache (F2-M4) keys
+        // whole pages by offset and demand paging maps them verbatim.
+        if (offset % kPageSize != 0) {
+            return -kEinval;
+        }
     } else {
         // Anonymous mappings require exactly one of MAP_SHARED / MAP_PRIVATE.
         const bool shared = (flags & MAP_SHARED) != 0;
