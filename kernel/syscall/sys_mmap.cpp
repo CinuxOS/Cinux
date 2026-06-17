@@ -1,0 +1,118 @@
+/**
+ * @file kernel/syscall/sys_mmap.cpp
+ * @brief sys_mmap handler implementation (F2-M2 batch 1)
+ *
+ * Anonymous mmap: picks a free virtual range (or honours MAP_FIXED), records a
+ * VMA in the current task's address space, and returns the base address.  No
+ * physical pages are allocated here -- demand paging serves the first access.
+ * File-backed mappings (fd != 0 without MAP_ANONYMOUS) are deferred to batch 4.
+ *
+ * Namespace: cinux::syscall
+ */
+
+#include "kernel/syscall/sys_mmap.hpp"
+
+#include "kernel/arch/x86_64/memory_layout.hpp"
+#include "kernel/errno.hpp"
+#include "kernel/lib/kprintf.hpp"
+#include "kernel/mm/address_space.hpp"
+#include "kernel/mm/vma.hpp"
+#include "kernel/proc/process.hpp"
+#include "kernel/proc/scheduler.hpp"
+
+namespace cinux::syscall {
+
+namespace {
+
+constexpr uint64_t kPageSize = 4096;
+
+constexpr uint64_t align_up(uint64_t v) {
+    return (v + kPageSize - 1) & ~(kPageSize - 1);
+}
+
+constexpr bool page_aligned(uint64_t v) {
+    return (v & (kPageSize - 1)) == 0;
+}
+
+/// Translate POSIX prot/flags into the kernel VmaFlags (anonymous mappings).
+cinux::mm::VmaFlags to_vma_flags(uint64_t prot, uint64_t flags) {
+    cinux::mm::VmaFlags v = cinux::mm::VmaFlags::Anonymous;
+    if (prot & PROT_READ) {
+        v |= cinux::mm::VmaFlags::Read;
+    }
+    if (prot & PROT_WRITE) {
+        v |= cinux::mm::VmaFlags::Write;
+    }
+    if (prot & PROT_EXEC) {
+        v |= cinux::mm::VmaFlags::Exec;
+    }
+    if (flags & MAP_SHARED) {
+        v |= cinux::mm::VmaFlags::Shared;
+    }
+    return v;
+}
+
+}  // namespace
+
+int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, uint64_t fd,
+                 uint64_t offset) {
+    // fd/offset apply only to file mappings (batch 4); anonymous ignores them.
+    (void)fd;
+    (void)offset;
+
+    if (length == 0) {
+        return -kEinval;
+    }
+
+    // Batch 1: anonymous mappings only.
+    if ((flags & MAP_ANONYMOUS) == 0) {
+        return -kEnosys;
+    }
+    // Linux requires exactly one of MAP_SHARED / MAP_PRIVATE.
+    const bool shared = (flags & MAP_SHARED) != 0;
+    const bool priv   = (flags & MAP_PRIVATE) != 0;
+    if (shared == priv) {
+        return -kEinval;
+    }
+
+    auto* task = cinux::proc::Scheduler::current();
+    if (task == nullptr || task->addr_space == nullptr) {
+        return -kEnomem;
+    }
+
+    const uint64_t aligned_len = align_up(length);
+
+    uint64_t map_addr = 0;
+    if ((flags & MAP_FIXED) != 0) {
+        // Honour the requested address, validating alignment + mmap window.
+        if (!page_aligned(addr) || addr < cinux::arch::USER_MMAP_BASE ||
+            addr + aligned_len > cinux::arch::USER_MMAP_END || addr + aligned_len < addr) {
+            return -kEinval;
+        }
+        map_addr = addr;
+        // Drop any prior VMA in this range (physical pages freed in batch 2's
+        // munmap; here we only fix the bookkeeping).
+        (void)task->addr_space->vmas().remove(map_addr, map_addr + aligned_len);
+    } else {
+        auto area =
+            task->addr_space->vmas().find_free_area(cinux::arch::USER_MMAP_BASE, aligned_len);
+        if (!area.ok()) {
+            return -to_errno(area.error());
+        }
+        map_addr = area.value();
+        if (map_addr + aligned_len > cinux::arch::USER_MMAP_END ||
+            map_addr + aligned_len < map_addr) {
+            return -kEnomem;
+        }
+    }
+
+    auto ir = task->addr_space->vmas().insert(map_addr, map_addr + aligned_len,
+                                              to_vma_flags(prot, flags));
+    if (!ir.ok()) {
+        return -to_errno(ir.error());
+    }
+
+    return static_cast<int64_t>(map_addr);
+}
+
+}  // namespace cinux::syscall
