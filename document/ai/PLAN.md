@@ -4,7 +4,8 @@
 > **F1-M3 = DMA 基础设施 ✅ 完成（2026-06-16）**。
 > **F1-M4 = 块设备抽象 ✅ 完成（2026-06-16）**。
 > **F5-M1 = AHCI DMA 迁移 ✅ 完成（2026-06-16）**。
-> **F2-M6 = ext2 Cache ✅ 完成（2026-06-17）**。F2 进度 6/7（M1-M6 ✅），下一 **F2-M7 Buddy**（Slab → M7b）。
+> **F2-M6 = ext2 Cache ✅ 完成（2026-06-17）**。
+> **direct-map 独立窗口 ✅ 完成（2026-06-17）**（F2-M7 前置：phys_to_virt→DIRECT_MAP_BASE，修 latent >1GB bug；buddy wiring 待 buddy 合入）。F2 进度 6/7（M1-M6 ✅），下一 **F2-M7 Buddy**（direct-map 就绪 → buddy 接 PMM；Slab → M7b）。
 > 状态：✅ DONE / 🔄 NEXT / ⏳ PENDING / ⛔ BLOCKED。每批≈一 commit，完成门 `run-kernel-test` 全绿。
 
 ## ✅ M2（内核日志）已完成 — 2026-06-16
@@ -170,6 +171,19 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 10. **EFER.NXE 未启用 → NX bit（bit63）是保留位**（F2-M4 批3 教训，2026-06）：F9 NX/SMEP/SMAP 未做，NXE 关闭。PTE 设 `FLAG_NX`（bit63）后访问该页触发 **reserved-bit #PF（err=0x8）循环**——`handle_pf` 文件路径初版给非 exec 页设 NX，致 Test B PF round-trip 无限循环。诊断：PF handler 临时打印 err/cr3/asPml4/translate，err=0x8(RSVD) + translate==phys 确认 PTE 设对、是保留位违例。修复：`handle_pf` 文件路径 + `sys_mprotect` 都**暂不设 NX**（非 exec 页不强 NX），留 F9 启用 NXE 后再开。另：单测验 `handle_pf` 文件 PF 需 `as.activate()` 切到进程 PML4 再访存（boot PML4 user 半空）；`get_page` 读文件在 cache 锁外、insert 在锁内（IF=0 防 IO-under-lock 重入死锁）；缓存页 virt 复用 direct-map（GOTCHA #7 同 DmaPool）。
 11. **PF handler 硬门控的 user-mode 判定 + 栈增长配套**（F2-M5 教训，2026-06）：`handle_pf` 杀进程（`exit_current`）必须判 `err & 0x04`（真实 user-mode fault）——kernel-test 是 ring0 访问用户地址（`err&0x04=0`），误杀会让测试 hang（test_file_mmap Test B 模式：`CurrentTaskGuard` 设 tmp task 但 ring0 访存）。`exit_current` 的 `context_switch` 抛弃 prev 中断帧切 next，不返回 PF handler（segfault 终止可行；"标记 Dead+延迟退出"反而要伪造中断帧，更复杂）。**栈 VMA 必须与硬门控配套**：门控上了但栈仍固定 16KB → 深调用栈用户程序栈 PF 落 VMA 外 → segfault（run-kernel-test 不跑真实用户深栈故绿，掩盖此依赖；init.cpp/gui_init.cpp 用 `USER_STACK_GROWTH=1MB` 扩 Stack VMA）。**execve `clear_user_mappings` 只清页表不清 VMA store**——Stack VMA 经 fork 继承 / execve 复用 AS 保留传播到所有用户程序。run-kernel-test 全 kernel-mode fault，不覆盖 user-mode segfault/demand 路径（靠 `make run` 实机 + `test_shell_*` 间接）。
 12. **read() 经 PageCache 的递归规避 + pipe 判别**（F2-M6 教训，2026-06）：`read_bytes` 是**新函数**（sys_read 对 `is_page_cacheable()` 真者调它），其内部 `get_page` 填充走 `inode->ops->read`（Ext2FileOps 读盘原语）——`Ext2FileOps::read` **不改不调 page_cache**，否则 read→get_page→read 死循环。判别"磁盘文件 vs pipe"不能用 `inode->type`（pipe 的 type 也是 `Regular`，[test_sys_pipe.cpp:105]），禁 RTTI 无法 dynamic_cast；用 `InodeOps::is_page_cacheable()` virtual（默认 false，Ext2FileOps override true）。`g_page_cache.hit_count()` 是 boot 全局跨测试累积，断言"二读命中"须在二读前捕获基线。
+13. **direct-map 独立窗口 + KERNEL_VMA 重载区分**（F2-M7 direct-map 前置教训，2026-06）：`phys_to_virt` 用 `DIRECT_MAP_BASE=0xFFFF880000000000`（PML4[272]，loader 1GB/2MB 大页 identity 映全 RAM），**不是** KERNEL_VMA。KERNEL_VMA 窗口硬限 2GB 且 boot 只映 higher-half 0-1GB，phys>1GB 落未映射处 demand-page 非 identity（latent bug，buddy 侵入式链表写 high phys 触发 PF 重入踩烂 → 死循环）。`-cpu max` 仅 KVM 时设（qemu.cmake），无 KVM 落回 qemu64 不暴露 PDPE1GB → direct_map_up_to 必有 2MB 页 fallback。**迁移严判**：访问任意 PMM 页（页表/DMA/缓存页/GS）是 direct-map→DIRECT_MAP_BASE；kernel image 相对（pmm bitmap `__kernel_stack_top - KERNEL_VMA`、kernel 链接基址、boot higher-half PT）保留 KERNEL_VMA。direct-map PT 页放 [0x10000,0x20000)（<1MB 不过 PMM，持久）。
+
+## ✅ direct-map 独立窗口（F2-M7 前置）已完成 — 2026-06-17
+
+> 目标：修 `phys_to_virt` 的 latent >1GB direct-map bug（KERNEL_VMA 窗口只 1GB），为 buddy 接 PMM 铺路（buddy 侵入式链表写 high phys 需 identity direct-map）。
+> 决策：独立窗口 `DIRECT_MAP_BASE=0xFFFF8800…`（PML4[272]，512GB）+ loader `direct_map_up_to`（1GB/2MB 大页 identity，不依赖 PDPE1GB）+ centralize `phys_to_virt`（phys_virt.hpp）+ 迁移 direct-map 站点（保留 kernel-image 站点 KERNEL_VMA）。详见 `document/notes/2026-06-17-direct-map-window.md`。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| 批1 | `DIRECT_MAP_BASE` 常量 + mini `direct_map_up_to`（2MB/1GB 大页 identity，PT@0x10000）+ loader 调用 + main_test identity 探针 | ✅ | f0b84ed | 734/0 + 探针 OK |
+| 批2 | centralize `phys_to_virt`→DIRECT_MAP_BASE（删 4 重复）+ 迁移 direct-map 站点（page_cache/dma_pool/execve/usermode/process_new）+ 保留 kernel-image KERNEL_VMA + 测试跟进 | ✅ | 93ac379 | 734/0 + host 49/0 + 实机不炸 |
+
+**完成总结**：direct-map 独立窗口落地——loader 用 1GB（PDPE1GB）/2MB 大页把全 RAM identity 映到 `DIRECT_MAP_BASE`（PML4[272]，PT@0x10000），`phys_to_virt` 切到新窗口，全栈 direct-map 站点迁移。修 latent >1GB bug（页表/page_cache/DMA/execve/GS 对 high phys 现正确 identity）。关键教训：`-cpu max` 仅 KVM 时设→qemu64 无 PDPE1GB，须 2MB fallback；迁移严判 direct-map vs kernel-image。遗留：**buddy 接 PMM（F2-M7 兑现）**——direct-map 前置就绪，buddy（feat/f2-m7-buddy 批1）接入后侵入式链表对 high phys 安全；buddy wiring 待 buddy PR 合入后另开。
 
 ## ✅ F2-M6（ext2 Cache）已完成 — 2026-06-17
 
