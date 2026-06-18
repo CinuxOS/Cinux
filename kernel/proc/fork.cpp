@@ -120,6 +120,24 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int fork(PidAllocat
 
     std::memcpy(child, parent, sizeof(Task));
 
+    // F3-M2 batch 3: the memcpy just copied the parent's shared-resource
+    // POINTERS (sig_actions / cwd / fd_table) into the child.  Give the child
+    // its OWN private copies now -- fork is copy semantics (clone in batch 4
+    // will share instead).  Doing this before any later error-path
+    // `delete child` ensures release() frees the child's own objects, not the
+    // parent's.  The block mask (sig_blocked) is retained from the memcpy;
+    // pending signals are not inherited (POSIX).
+    child->sig_actions = SharedSigActions::create_copy(parent->sig_actions);
+    child->cwd         = SharedCwd::create_copy(parent->cwd);
+    child->fd_table    = nullptr;  // detached; rebuilt fresh below
+    child->sig_pending = 0;
+    if (child->sig_actions == nullptr || child->cwd == nullptr) {
+        cinux::lib::kprintf("[PROC] fork: shared-state copy failed\n");
+        delete child;
+        pid_alloc.free(child_pid);
+        return -1;
+    }
+
     child->tid         = next_tid.fetch_add(1, cinux::lib::MemoryOrder::Relaxed);
     child->pid         = child_pid;
     child->ppid        = parent->pid;
@@ -127,10 +145,6 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int fork(PidAllocat
     child->parent      = parent;
     child->children    = nullptr;
     child->exit_status = 0;
-    // F3-M1: a forked child does not inherit pending signals (POSIX);
-    // dispositions and the block mask are inherited via the memcpy above.
-    child->sig_pending = 0;
-    child->fd_table    = nullptr;
 
     uint64_t child_stack_phys = cinux::mm::g_pmm.alloc_pages(TaskBuilder::STACK_PAGES);
     if (child_stack_phys == 0) {

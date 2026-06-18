@@ -14,6 +14,7 @@
 
 #include "kernel/arch/x86_64/memory_layout.hpp"
 #include "kernel/arch/x86_64/paging_config.hpp"
+#include "kernel/fs/file.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/pmm.hpp"
 #include "kernel/mm/vmm.hpp"
@@ -124,13 +125,44 @@ Task* TaskBuilder::build() {
     task->sched_class             = sched_class_;
     task->name                    = name_;
 
-    task->cwd[0] = '/';
-    task->cwd[1] = '\0';
+    // F3-M2 batch 3: fresh tasks own their own refcounted shared resources.
+    // (The stack-map error path above runs before this point and leaves these
+    // nullptr, which release_resources handles safely.)
+    task->sig_actions = SharedSigActions::create();
+    task->cwd         = SharedCwd::create();
+    if (task->sig_actions == nullptr || task->cwd == nullptr) {
+        cinux::lib::kprintf("[PROC] TaskBuilder::build: shared-state alloc failed\n");
+        delete task;
+        return nullptr;
+    }
 
     cinux::lib::kprintf("[PROC] Created task tid=%u name='%s' stack=0x%p\n", task->tid, task->name,
                         reinterpret_cast<void*>(task->kernel_stack_top));
 
     return task;
+}
+
+// ============================================================
+// Shared-resource teardown (F3-M2 batch 3)
+// ============================================================
+
+void Task::release_resources() {
+    // Drop this task's references to its refcounted shared objects.  Each is
+    // either a private copy (refcount 1 -> freed) or a shared object (refcount
+    // merely decremented).  fd_table is forward-declared in process.hpp, so the
+    // call to its release() lives here (file.hpp is fully included).
+    if (sig_actions != nullptr) {
+        sig_actions->release();
+        sig_actions = nullptr;
+    }
+    if (cwd != nullptr) {
+        cwd->release();
+        cwd = nullptr;
+    }
+    if (fd_table != nullptr) {
+        fd_table->release();
+        fd_table = nullptr;
+    }
 }
 
 }  // namespace cinux::proc

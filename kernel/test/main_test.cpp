@@ -55,6 +55,7 @@ void run_ext2_inode_ops_tests();
 void run_syscall_ext2_tests();
 void run_shell_write_tests();
 void run_cwd_stat_tests();
+void run_shared_resources_tests();
 void run_sync_concurrent_tests();
 void run_canvas_tests();
 void run_mouse_event_tests();
@@ -261,6 +262,7 @@ extern "C" void kernel_main() {
 
     // CWD/stat tests (028c): chdir/getcwd/stat/fstat/path canonicalize
     run_cwd_stat_tests();
+    run_shared_resources_tests();
 
     // Step 5: Report and exit
     int exit_code = (test::get_total_failed() > 0) ? 1 : 0;

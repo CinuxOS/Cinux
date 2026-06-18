@@ -104,6 +104,55 @@ static_assert(offsetof(CpuContext, fs_base) == 80, "fs_base at offset 80");
 static_assert(sizeof(CpuContext) == 96, "CpuContext must be 96 bytes (alignas(16) pads 88->96)");
 
 // ============================================================
+// Shared working directory (F3-M2 batch 3)
+// ============================================================
+
+/**
+ * @brief Reference-counted current working directory
+ *
+ * CLONE_FS threads share one instance (acquire bumps the refcount); fork and
+ * clone-without-FS get a private copy.  Heap-allocated (slab general cache) so
+ * a Task holds a pointer and clone sharing is pointer + acquire().  The path
+ * buffer is fixed at 256 bytes (matches the former inline cwd[256]).
+ */
+struct SharedCwd {
+    static constexpr uint32_t kPathMax = 256;
+
+    uint32_t refcount;
+    char     path[kPathMax];
+
+    /// Allocate with @p init (defaults to "/"); refcount = 1.
+    static SharedCwd* create(const char* init = "/") {
+        auto* p = new SharedCwd;
+        if (p != nullptr) {
+            p->refcount  = 1;
+            uint32_t i   = 0;
+            char*    dst = p->path;
+            if (init != nullptr) {
+                for (; i + 1 < kPathMax && init[i] != '\0'; ++i) {
+                    dst[i] = init[i];
+                }
+            }
+            dst[i] = '\0';
+        }
+        return p;
+    }
+
+    /// Allocate a private copy of @p src; refcount = 1.
+    static SharedCwd* create_copy(const SharedCwd* src) {
+        return create(src != nullptr ? src->path : "/");
+    }
+
+    void acquire() { ++refcount; }
+
+    void release() {
+        if (refcount > 0 && --refcount == 0) {
+            delete this;
+        }
+    }
+};
+
+// ============================================================
 // Task Control Block
 // ============================================================
 
@@ -120,10 +169,25 @@ struct Task {
     static void* operator new(size_t, std::align_val_t) {
         return cinux::mm::cache_alloc(cinux::mm::g_task_cache);
     }
-    static void operator delete(void* p) { cinux::mm::cache_free(cinux::mm::g_task_cache, p); }
-    static void operator delete(void* p, std::align_val_t) {
+    // F3-M2 batch 3: release shared refcounted resources (sig_actions / cwd /
+    // fd_table) before the slab memory is returned.  Defined out-of-line
+    // (task_builder.cpp) because fd_table's release() needs FDTable's full
+    // definition (only forward-declared here).
+    static void operator delete(void* p) {
+        if (p != nullptr) {
+            static_cast<Task*>(p)->release_resources();
+        }
         cinux::mm::cache_free(cinux::mm::g_task_cache, p);
     }
+    static void operator delete(void* p, std::align_val_t) {
+        if (p != nullptr) {
+            static_cast<Task*>(p)->release_resources();
+        }
+        cinux::mm::cache_free(cinux::mm::g_task_cache, p);
+    }
+
+    /// Drop this task's references to its shared sig_actions / cwd / fd_table.
+    void release_resources();
 
     /** Saved callee-saved registers for context switching. */
     CpuContext ctx;
@@ -161,14 +225,16 @@ struct Task {
     uint64_t brk_initial{};  ///< Heap start (ELF image end, set by execve)
     uint64_t brk_max{};      ///< Heap ceiling (USER_BRK_MAX)
 
-    // F3-M1: POSIX signal state.  Dispositions (sig_actions) and the block
-    // mask (sig_blocked) are inherited across fork(); pending signals are
-    // not (cleared explicitly in fork()).
-    SigAction sig_actions[kSignalCount]{};  ///< Per-signal disposition (1..kSignalMax)
-    SigSet    sig_pending{0};               ///< Signals pending delivery
-    SigSet    sig_blocked{0};               ///< Signals blocked from delivery
-    uint64_t  sig_altstack{0};              ///< sigaltstack base (0 = main stack)
-    uint64_t  sig_altstack_size{0};         ///< sigaltstack size in bytes
+    // F3-M1: POSIX signal state.  The block mask (sig_blocked) is inherited
+    // across fork(); pending signals are not (cleared in fork()).  F3-M2 batch
+    // 3: dispositions live in a refcounted SharedSigActions so CLONE_SIGHAND
+    // threads can share them (fork copies, clone may share).
+    SharedSigActions* sig_actions{
+        nullptr};                   ///< Refcounted dispositions (never null for a live task)
+    SigSet   sig_pending{0};        ///< Signals pending delivery
+    SigSet   sig_blocked{0};        ///< Signals blocked from delivery
+    uint64_t sig_altstack{0};       ///< sigaltstack base (0 = main stack)
+    uint64_t sig_altstack_size{0};  ///< sigaltstack size in bytes
 
     // F3-M2: futex wait state.  Set in FUTEX_WAIT just before blocking, then
     // matched (uaddr + bitset) and cleared by FUTEX_WAKE.  futex_uaddr==0
@@ -209,8 +275,8 @@ struct Task {
     /** FPU/SSE state (512 bytes, 16-byte aligned for fxsave/fxrstor). */
     alignas(16) uint8_t fpu_state[512];
 
-    /** Per-process current working directory (absolute path, NUL-terminated). */
-    char cwd[256];
+    /** Per-process current working directory (refcounted; F3-M2 batch 3). */
+    SharedCwd* cwd{nullptr};
 
     /** Intrusive link for the global pid->Task registry (sys_kill lookup). */
     Task* registry_next{nullptr};
