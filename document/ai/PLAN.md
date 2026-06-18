@@ -5,7 +5,7 @@
 > **F1-M4 = 块设备抽象 ✅ 完成（2026-06-16）**。
 > **F5-M1 = AHCI DMA 迁移 ✅ 完成（2026-06-16）**。
 > **F2-M6 = ext2 Cache ✅ 完成（2026-06-17）**。
-> **F2-M7 Buddy PMM ✅ 完成（2026-06-18，fresh KVM 742/0 + GUI 冒烟）**：buddy 伙伴系统替换 PMM flat bitmap（per-order bitmap free-list，非侵入式）。Bug1（direct-map reserved PF，批3）+ Bug2（WSL2 nested KVM 对侵入式 free-list 写读不一致，改 bitmap 解，GOTCHA#14）均修。**详见下方「F2-M7 Buddy PMM」段 + `document/notes/2026-06-17-f2-m7-direct-map-buddy-handoff.md`**。solid 基线 = main（M6 #12，734）。F2 进度 7/7（M1-M7 ✅）。
+> **F2-M7 Buddy PMM ✅ 完成（2026-06-18，fresh KVM 742/0 + GUI 冒烟）**：buddy 伙伴系统替换 PMM flat bitmap（per-order bitmap free-list，非侵入式）。Bug1（direct-map reserved PF，批3）+ Bug2（WSL2 nested KVM 对侵入式 free-list 写读不一致，改 bitmap 解，GOTCHA#14）均修。**详见下方「F2-M7 Buddy PMM」段 + `document/notes/2026-06-17-f2-m7-direct-map-buddy-handoff.md`**。solid 基线 = main（M6 #12，734）。F2 进度 7/7 + M7b（M1-M7 ✅，**M7b SLAB ✅ 完成 2026-06-18**：kmalloc 全替 Heap + 专用缓存 Task/VMA/CachedPage，见下方「F2-M7b」段）。
 > 状态：✅ DONE / 🔄 NEXT / ⏳ PENDING / ⛔ BLOCKED。每批≈一 commit，完成门 `run-kernel-test` 全绿。
 
 ## ✅ M2（内核日志）已完成 — 2026-06-16
@@ -173,6 +173,7 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 12. **read() 经 PageCache 的递归规避 + pipe 判别**（F2-M6 教训，2026-06）：`read_bytes` 是**新函数**（sys_read 对 `is_page_cacheable()` 真者调它），其内部 `get_page` 填充走 `inode->ops->read`（Ext2FileOps 读盘原语）——`Ext2FileOps::read` **不改不调 page_cache**，否则 read→get_page→read 死循环。判别"磁盘文件 vs pipe"不能用 `inode->type`（pipe 的 type 也是 `Regular`，[test_sys_pipe.cpp:105]），禁 RTTI 无法 dynamic_cast；用 `InodeOps::is_page_cacheable()` virtual（默认 false，Ext2FileOps override true）。`g_page_cache.hit_count()` 是 boot 全局跨测试累积，断言"二读命中"须在二读前捕获基线。
 13. **direct-map 独立窗口 + KERNEL_VMA 重载区分**（F2-M7 direct-map 前置教训，2026-06）：`phys_to_virt` 用 `DIRECT_MAP_BASE=0xFFFF880000000000`（PML4[272]，loader 1GB/2MB 大页 identity 映全 RAM），**不是** KERNEL_VMA。KERNEL_VMA 窗口硬限 2GB 且 boot 只映 higher-half 0-1GB，phys>1GB 落未映射处 demand-page 非 identity（latent bug，buddy 侵入式链表写 high phys 触发 PF 重入踩烂 → 死循环）。`-cpu max` 仅 KVM 时设（qemu.cmake），无 KVM 落回 qemu64 不暴露 PDPE1GB → direct_map_up_to 必有 2MB 页 fallback。**迁移严判**：访问任意 PMM 页（页表/DMA/缓存页/GS）是 direct-map→DIRECT_MAP_BASE；kernel image 相对（pmm bitmap `__kernel_stack_top - KERNEL_VMA`、kernel 链接基址、boot higher-half PT）保留 KERNEL_VMA。direct-map PT 页放 [0x10000,0x20000)（<1MB 不过 PMM，持久）。**direct-map 区域（PML4[272]，`DIRECT_MAP_BASE+…`）严禁 `VMM.map/unmap/translate`**：direct-map 是 loader 建的 1GB/2MB huge 永久 identity 映射，全栈共享。`VMM::map` 内 `walk_level` 遇 huge entry（PS bit）会 **split**（拆成 4KB PT + 改写原 entry）；对 direct-map 的 1GB huge 触发即破坏全局 direct-map → 后续 `phys_to_virt` walk 错乱命中 phys 0 BIOS 数据当 PT → reserved-bit PF（err=0x9）。教训：M3 `DmaPool::alloc` 旧逻辑对 virt 调 `g_vmm.map`（M3 时 virt 在 KERNEL_VMA 窗口，map 无害），批2 迁 direct-map 后漏删 map → 首次 AHCI `g_dma_pool.alloc` 即崩（`test_cache_reads_real_file`，fresh build 才暴露）。修法：direct-map 复用 loader 永久映射——alloc 只取 phys（virt=phys+DIRECT_MAP_BASE 直接可用，**不 map**），free 只 free phys（**不 unmap**）。`VMM.translate` 对 huge 也不支持（walk_level huge+!alloc 返 nullptr），故 direct-map virt 不该经 translate 验证。
 14. **WSL2 nested KVM（AMD）EPT 对侵入式 free-list 写读不一致**（F2-M7 Bug2 教训，2026-06-18）：buddy 初版侵入式 free-list 把 `next` 指针写在 free 页头（经 direct-map `phys+DIRECT_MAP_BASE`），依赖 direct-map 写读严格一致。WSL2 nested KVM（AMD `-accel kvm -cpu max`，hypervisor flag=14）EPT 对「huge page 内 sub-page 写」做不到一致——同地址 `0xFFFF880040000000`（phys 1GB）main 单次读返 valid（260096）、buddy op 读返 poison（`0xCAFEBABEDEADC0DE`），振荡→`pop_free` 遍历 #GP（`test_wm_close_button_closes_terminal_pipes`）。**TCG（`CINUX_NO_KVM=1`，2MB path）742/0 全绿**证明 buddy wiring 本身正确（根因 nested KVM 物理层，非逻辑 bug）。**修 = buddy 改非侵入式 per-order bitmap free-list**（bitmap 存 metadata 区，不写 free 页，KVM nested safe；`find_first_set` 天然 low-first）。诊断教训：CHK（main 单次读）valid ↔ buddy op 读 poison 的**同地址振荡**→ nested KVM EPT 嫌疑；**TCG 对比（`CINUX_NO_KVM` env）是定位物理层 bug 的利器**（逻辑层错 TCG 也复现，物理层错 TCG 绿）。凡依赖 direct-map sub-page 写读一致的侵入式结构（free-list/对象头）在 nested KVM 都有此风险，优先用 metadata 数组。
+15. **slab 复用暴露按指针键控的缓存（F2-M7b 批2 教训，2026-06-18）**：page cache 原按 `Inode*` 指针做 hash/lookup 键。slab（正确）复用已释放 Inode 的内存地址给新 Inode → 新文件查 cache 时**命中陈旧页**（旧文件内容），`sys_read` 返回错字节（`test_shell_write` echo-redirect 读回 `"Hello from e"` 而非 `"hello world\n"`；Heap first-fit 侥幸不复用同地址故潜伏）。**根因非 slab**（复用是 slab 本职），是 page cache 用可复用指针当稳定键。修：cache 改按 `inode->ino`（稳定号）键控（hash/lookup/insert）。**通用铁律**：任何按对象指针/地址键控的在线结构（cache/table），当对象经 slab/heap 分配释放时都有同款陈旧命中风险，键须用稳定标识（id/number）而非指针。
 
 ## ✅ direct-map 独立窗口（F2-M7 前置）Bug1 已修 — 2026-06-17（fresh build 734/0）
 
@@ -203,6 +204,34 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 | 批4b | PMM bitmap→buddy wiring（init/alloc/free/count + order_/bitmap_storage + `_locked`）+ **Bug2 修**：侵入式→bitmap free-list（nested KVM safe）+ test_buddy 适配 + qemu.cmake `CINUX_NO_KVM` env（TCG 诊断） | ✅ | (本次) | **fresh KVM 742/0 + 实机 GUI 启动到桌面** |
 
 **完成总结**（F2-M7）：buddy 伙伴系统替换 PMM flat bitmap——`BuddyAllocator`（**per-order bitmap free-list**，1 bit/block，`find_first_set` 天然 low-first，非侵入式不写 free 页）+ PMM 接入（`init` 用 `buddy.init`+`mark_free_region` 排除 kernel/metadata 区；`alloc_page[_locked]`/`alloc_pages`/`free[_pages]`/count 调 buddy；`_locked` 保 IF=0 锁契约）+ order_ 数组（1B/页，head order 权威）+ bitmap_storage（per-order bitmap ~575KB @ order_storage 后）。关键教训 **GOTCHA#14**（nested KVM EPT 对 intrusive free-list 写读不一致 → 改 bitmap metadata 解；TCG 验证 buddy 逻辑正确）。验证：fresh KVM run-kernel-test 742/0 + 实机 `make run` GUI 启动到桌面不崩。遗留：SLAB（M7b）/ CoW（F3）。
+
+## ✅ F2-M7b（SLAB 分配器）已完成 — 2026-06-18（fresh KVM 752/0 + host 48/0 + GUI 冒烟）
+
+> 目标：buddy 之上分层小对象分配器 `SlabAllocator`，**全替 Heap**（不留 fallback「尾巴」），闭环 PMM(buddy)→Slab→kmalloc/kfree→operator new。小对象(≤2KB)走 Slab（9 通用缓存 + 专用缓存）；大对象(>2KB / 大对齐)走 **buddy + direct-map 复用**（DmaPool 同款 GOTCHA#7/#13，零 map/零元数据）。
+> 决策（propose 已确认，2026-06-18）：
+> - **#1 全替 Heap**：`kmalloc` 通用（小→Slab / 大→buddy+direct-map），Heap 删，无 fallback。
+> - **#2 大对象复用 direct-map**：`virt=phys+DIRECT_MAP_BASE`，不 map/unmap；`kfree` 用 `phys=virt-DIRECT_MAP_BASE`+`free_pages`（buddy 记 order 权威，count 忽略）。免 KMEM_LARGE 区。
+> - **#3 Slab 页 4K 映射**：侵入式 freelist 写在 4K 页内（KMEM_SLAB 区，PML4[256]），**绝不 direct-map huge**（GOTCHA#14/#15）。empty slab 可回收。
+> - **#4 专用缓存现在做**：Task/Inode/VMA/CachedPage（现存类型）；Dentry 弃（不存在）；Pipe 走通用缓存。
+> - **#5 Slab 返 nullptr on OOM**（operator new 链，freestanding 无异常，同 Heap 契约，非 ErrorOr）。
+> - **#6 IF=0 安全**：PF handler(IF=0) 的 `new CachedPage`→kmalloc→Slab，须 IF=0 安全（批1 核 Heap::alloc 现状定 Slab 锁契约）。
+> 删除面（批2）：`heap.{hpp,cpp}` + `test_heap.cpp` + CMake 行；改 `crt_stub.cpp`(7 重载)/`main.cpp:138`/`test/main_test.cpp:151`/`ram_block_device.hpp`(直接 g_heap.alloc/free 大块存储)。
+> 不做：Heap 保底（全删）、Dentry 缓存、SLAB 着色/NUMA、性能 benchmark 套件（批4 仅方向断言）。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| 批1 | `slab.hpp/cpp`（SlabAllocator 8 通用缓存 16-2048B + 页内 header + 侵入式 freelist + 4K 页 on-demand grow + KMEM_SLAB 区 + irq_guard IF=0）+ memory_layout KMEM_SLAB + CMake + `test_slab.cpp` 单测 | ✅ | 563bb0f | fresh KVM 750/0（742+8）+ host 49/0 |
+| 批2 | `kmalloc/kfree`（小→Slab / 大→buddy+direct-map，free 按区路由）+ `crt_stub` 7 重载 + main/main_test init + `ram_block_device` 迁移 + **删 heap.{hpp,cpp}/test_heap(内核+host)** + slab 硬化（grow 页零化 + O(1) double-free 毒检）+ `test_kmalloc.cpp` 11 测 + `test_slab` +double-free 测 + **page_cache 按 `ino` 键控**（修 slab 复用 Inode 地址暴露的陈旧命中，GOTCHA#15） | ✅ | 4e05892 | **fresh KVM 751/0 + host 48/0 + 实机 GUI 到桌面** |
+| 批3 | 专用缓存 API（`create_cache`/`cache_alloc`/`cache_free`，`kObjAlign`=16 支持非幂 obj_size）+ `dedicated_caches.cpp`（task/vma/cached_page，类专属 operator new/delete 自动路由，无调用点改动）+ `test_slab` +dedicated 测。**Inode 不入 slab**：ext2 用固定 `inode_cache_[]` 数组自管（非堆分配，N/A）。实测 Task=1008B→4/slab(原 1024 档 3)、VMA=56B→72/slab(原 64 档 63) 真省碎片；CachedPage=64B(2幂,接线为完整) | ✅ | 5d932e8 | **fresh KVM 752/0 + host 48/0 + 实机 GUI 到桌面** |
+| 批4 | 收尾：ROADMAP/PLAN/todo/notes + GOTCHA + fresh KVM run-kernel-test + `test_host` + `make run` 冒烟 | ✅ | (本次) | fresh KVM 752/0 + host 48/0 + GUI 到桌面 |
+
+**完成总结**（F2-M7b，4 批）：SLAB 分配器全替 Heap——批1 `SlabAllocator`（8 通用缓存 16-2048B + 页内 header + 侵入式 freelist + 4K 页 on-demand grow，KMEM_SLAB 独立 4K 区 PML4[256]，irq_guard IF=0 安全）；批2 `kmalloc/kfree`（小→Slab / 大→buddy+direct-map 复用，零 map/零元数据）+ crt_stub 7 重载 + ram_block_device 迁移 + **删 heap.{hpp,cpp}/test_heap（内核+host，净 -1951 行）** + slab 硬化（grow 页零化 + O(1) double-free 毒检）+ **修 page_cache 按 `ino` 键控**（slab 复用 Inode 地址暴露的陈旧命中 → sys_read 返错字节，GOTCHA#15）；批3 专用缓存 API（`create_cache`/`cache_alloc`/`cache_free`，`kObjAlign`=16 支持非幂 obj_size）+ dedicated_caches（task/vma/cached_page，**类专属 operator new/delete 自动路由**，无调用点改动）——实测 Task=1008B→4/slab(原 3)、VMA=56B→72/slab(原 63) 真省碎片；Inode 不入 slab（ext2 固定 `inode_cache_[]` 自管，N/A）。
+
+架构：A.6 边界（Slab/kmalloc 返 nullptr on OOM，非 ErrorOr）；A.7 不入 Cinux-Base（依赖 PMM/VMM/heap）；侵入式 freelist 写 4K 页（绝不 direct-map huge，GOTCHA#13/#14）；大对象复用 direct-map（DmaPool 同款 GOTCHA#7/#13）；类专属 operator new/delete 让专用缓存对调用点透明（错误路径自动覆盖）。
+
+关键教训 **GOTCHA#15**（slab 复用暴露按指针键控的缓存——page cache 按 `Inode*` 键控 → 新文件命中陈旧页 → `sys_read` 返错字节；Heap first-fit 侥幸不复用同地址故潜伏。改按 `inode->ino` 稳定号键控。**通用铁律**：按对象指针/地址键控的在线结构（cache/table），对象经分配器回收时必然陈旧命中，键须用稳定 id/number 非 pointer）。
+
+验证：fresh KVM run-kernel-test 742→**752/0**（+10 slab/kmalloc/dedicated 单测 - 旧 heap 测 + page_cache 修复回归）+ host test_host **48/0** + 实机 `make run` GUI 启动到桌面不崩。**F2 内存管理增强里程碑收官（M1-M7 + M7b）**。
 
 ## ✅ F2-M6（ext2 Cache）已完成 — 2026-06-17
 
