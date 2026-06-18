@@ -22,6 +22,7 @@
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/address_space.hpp"
 #include "kernel/mm/heap.hpp"
+#include "kernel/mm/slab.hpp"
 #include "kernel/mm/page_cache.hpp"
 #include "kernel/mm/pmm.hpp"
 #include "kernel/mm/vmm.hpp"
@@ -33,6 +34,7 @@ void run_video_tests();
 void run_keyboard_tests();
 void run_pmm_tests();
 void run_buddy_tests();
+void run_slab_tests();
 void run_vmm_tests();
 void run_heap_tests();
 void run_heap_lock_stress_tests();
@@ -141,6 +143,10 @@ extern "C" void kernel_main() {
     // VMM tests: initialise VMM after PMM, then run tests
     cinux::mm::g_vmm.init();
     run_vmm_tests();
+
+    // Slab tests (F2-M7b): initialise after VMM (slab maps pages) and PMM.
+    cinux::mm::g_slab.init(cinux::arch::KMEM_SLAB_BASE, cinux::arch::KMEM_SLAB_SIZE);
+    run_slab_tests();
 
     // Video tests require VMM (framebuffer maps via map_2mb)
     run_video_tests();

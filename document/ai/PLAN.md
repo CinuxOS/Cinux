@@ -5,7 +5,7 @@
 > **F1-M4 = 块设备抽象 ✅ 完成（2026-06-16）**。
 > **F5-M1 = AHCI DMA 迁移 ✅ 完成（2026-06-16）**。
 > **F2-M6 = ext2 Cache ✅ 完成（2026-06-17）**。
-> **F2-M7 Buddy PMM ✅ 完成（2026-06-18，fresh KVM 742/0 + GUI 冒烟）**：buddy 伙伴系统替换 PMM flat bitmap（per-order bitmap free-list，非侵入式）。Bug1（direct-map reserved PF，批3）+ Bug2（WSL2 nested KVM 对侵入式 free-list 写读不一致，改 bitmap 解，GOTCHA#14）均修。**详见下方「F2-M7 Buddy PMM」段 + `document/notes/2026-06-17-f2-m7-direct-map-buddy-handoff.md`**。solid 基线 = main（M6 #12，734）。F2 进度 7/7（M1-M7 ✅）。
+> **F2-M7 Buddy PMM ✅ 完成（2026-06-18，fresh KVM 742/0 + GUI 冒烟）**：buddy 伙伴系统替换 PMM flat bitmap（per-order bitmap free-list，非侵入式）。Bug1（direct-map reserved PF，批3）+ Bug2（WSL2 nested KVM 对侵入式 free-list 写读不一致，改 bitmap 解，GOTCHA#14）均修。**详见下方「F2-M7 Buddy PMM」段 + `document/notes/2026-06-17-f2-m7-direct-map-buddy-handoff.md`**。solid 基线 = main（M6 #12，734）。F2 进度 7/7（M1-M7 ✅）；**M7b SLAB 🔄 进行中（全替 Heap,propose 已确认 2026-06-18,见下方「F2-M7b」段）**。
 > 状态：✅ DONE / 🔄 NEXT / ⏳ PENDING / ⛔ BLOCKED。每批≈一 commit，完成门 `run-kernel-test` 全绿。
 
 ## ✅ M2（内核日志）已完成 — 2026-06-16
@@ -203,6 +203,26 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 | 批4b | PMM bitmap→buddy wiring（init/alloc/free/count + order_/bitmap_storage + `_locked`）+ **Bug2 修**：侵入式→bitmap free-list（nested KVM safe）+ test_buddy 适配 + qemu.cmake `CINUX_NO_KVM` env（TCG 诊断） | ✅ | (本次) | **fresh KVM 742/0 + 实机 GUI 启动到桌面** |
 
 **完成总结**（F2-M7）：buddy 伙伴系统替换 PMM flat bitmap——`BuddyAllocator`（**per-order bitmap free-list**，1 bit/block，`find_first_set` 天然 low-first，非侵入式不写 free 页）+ PMM 接入（`init` 用 `buddy.init`+`mark_free_region` 排除 kernel/metadata 区；`alloc_page[_locked]`/`alloc_pages`/`free[_pages]`/count 调 buddy；`_locked` 保 IF=0 锁契约）+ order_ 数组（1B/页，head order 权威）+ bitmap_storage（per-order bitmap ~575KB @ order_storage 后）。关键教训 **GOTCHA#14**（nested KVM EPT 对 intrusive free-list 写读不一致 → 改 bitmap metadata 解；TCG 验证 buddy 逻辑正确）。验证：fresh KVM run-kernel-test 742/0 + 实机 `make run` GUI 启动到桌面不崩。遗留：SLAB（M7b）/ CoW（F3）。
+
+## 🔄 F2-M7b（SLAB 分配器）进行中 — 2026-06-18（propose 已确认）
+
+> 目标：buddy 之上分层小对象分配器 `SlabAllocator`，**全替 Heap**（不留 fallback「尾巴」），闭环 PMM(buddy)→Slab→kmalloc/kfree→operator new。小对象(≤2KB)走 Slab（9 通用缓存 + 专用缓存）；大对象(>2KB / 大对齐)走 **buddy + direct-map 复用**（DmaPool 同款 GOTCHA#7/#13，零 map/零元数据）。
+> 决策（propose 已确认，2026-06-18）：
+> - **#1 全替 Heap**：`kmalloc` 通用（小→Slab / 大→buddy+direct-map），Heap 删，无 fallback。
+> - **#2 大对象复用 direct-map**：`virt=phys+DIRECT_MAP_BASE`，不 map/unmap；`kfree` 用 `phys=virt-DIRECT_MAP_BASE`+`free_pages`（buddy 记 order 权威，count 忽略）。免 KMEM_LARGE 区。
+> - **#3 Slab 页 4K 映射**：侵入式 freelist 写在 4K 页内（KMEM_SLAB 区，PML4[256]），**绝不 direct-map huge**（GOTCHA#14/#15）。empty slab 可回收。
+> - **#4 专用缓存现在做**：Task/Inode/VMA/CachedPage（现存类型）；Dentry 弃（不存在）；Pipe 走通用缓存。
+> - **#5 Slab 返 nullptr on OOM**（operator new 链，freestanding 无异常，同 Heap 契约，非 ErrorOr）。
+> - **#6 IF=0 安全**：PF handler(IF=0) 的 `new CachedPage`→kmalloc→Slab，须 IF=0 安全（批1 核 Heap::alloc 现状定 Slab 锁契约）。
+> 删除面（批2）：`heap.{hpp,cpp}` + `test_heap.cpp` + CMake 行；改 `crt_stub.cpp`(7 重载)/`main.cpp:138`/`test/main_test.cpp:151`/`ram_block_device.hpp`(直接 g_heap.alloc/free 大块存储)。
+> 不做：Heap 保底（全删）、Dentry 缓存、SLAB 着色/NUMA、性能 benchmark 套件（批4 仅方向断言）。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| 批1 | `slab.hpp/cpp`（SlabAllocator 9 通用缓存 + Slab/SlabCache 侵入式 freelist + 4K 页 on-demand expand/reclaim + KMEM_SLAB 区 + `_locked` IF=0 契约）+ memory_layout KMEM_SLAB + CMake + `test_slab.cpp` 单测 | 🔄 | — | 目标 742+~8 |
+| 批2 | `kmalloc/kfree`（小→Slab / 大→buddy+direct-map，free 按区路由）+ `crt_stub` 7 重载 + main/main_test init + `ram_block_device` 迁移 + **删 heap/test_heap** + `test_kmalloc.cpp` | ⏳ | — | 全替绿 |
+| 批3 | 专用缓存（`create_cache`+ctor/dtor，Task/Inode/VMA/CachedPage）+ 热点接线 + test | ⏳ | — | +~3 |
+| 批4 | 收尾：ROADMAP/PLAN/todo/notes + GOTCHA#15/#16 + fresh KVM run-kernel-test + `test_host` + `make run` 冒烟 | ⏳ | — | 全绿 |
 
 ## ✅ F2-M6（ext2 Cache）已完成 — 2026-06-17
 
