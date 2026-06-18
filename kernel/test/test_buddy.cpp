@@ -2,11 +2,10 @@
  * @file kernel/test/test_buddy.cpp
  * @brief QEMU in-kernel tests for the BuddyAllocator (F2-M7 batch 1)
  *
- * Exercises the buddy allocator in isolation over a fake "physical" region of
- * real mapped kernel memory.  base_phys is the fake region's physical address
- * (its KERNEL_VMA virtual address minus KERNEL_VMA); the allocator reaches each
- * page through DIRECT_MAP_BASE + phys, which identity-maps the same physical
- * pages.  No PMM or scheduler is involved.
+ * Exercises the buddy allocator in isolation over 256 page indices.  The
+ * bitmap free-list tracks blocks purely by index (it never touches the pages
+ * themselves), so no real memory mapping is needed.  No PMM or scheduler is
+ * involved.
  *
  * Validates: init stats, single-page alloc/free, contiguous order-N blocks,
  * bulk alloc/free with exact count restoration, double-free / out-of-range
@@ -29,13 +28,13 @@ namespace {
 /// 256 pages = 1 MiB, a clean power of two so the whole region is one order-8
 /// block initially -- exercising split/coalesce as tests alloc smaller orders.
 constexpr uint64_t kFakePages = 256;
-uint8_t            g_fake_mem[kFakePages * PAGE_SIZE];
 uint8_t            g_order[kFakePages];
+uint8_t            g_bitmap[1024];  // per-order free bitmaps (bitmap_bytes(256) is tiny)
 
-/// Initialise a fresh buddy over the fake region (all 256 pages free).
+/// Initialise a fresh buddy over 256 page indices (all free).  base_phys is
+/// recorded but unused -- the bitmap free-list works purely on page indices.
 void setup(BuddyAllocator& b) {
-    uint64_t base_phys = reinterpret_cast<uint64_t>(g_fake_mem) - KERNEL_VMA;
-    b.init(base_phys, kFakePages, g_order);
+    b.init(0, kFakePages, g_order, g_bitmap);
     b.mark_free_region(0, kFakePages);
 }
 

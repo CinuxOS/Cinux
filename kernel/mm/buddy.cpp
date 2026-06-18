@@ -13,31 +13,45 @@ namespace cinux::mm {
 // Initialisation
 // ============================================================
 
-void BuddyAllocator::init(uint64_t base_phys, uint64_t total_pages, uint8_t* order_storage) {
+uint64_t BuddyAllocator::bitmap_bytes(uint64_t total_pages) {
+    uint64_t bytes = 0;
+    for (int o = 0; o <= kMaxOrder; o++) {
+        uint64_t bits = total_pages >> o;
+        bytes += (((bits + 7) / 8) + 7) & ~static_cast<uint64_t>(7);  // 8-byte aligned
+    }
+    return bytes;
+}
+
+void BuddyAllocator::init(uint64_t base_phys, uint64_t total_pages, uint8_t* order_storage,
+                          uint8_t* bitmap_storage) {
     base_phys_   = base_phys;
     total_pages_ = total_pages;
     order_       = order_storage;
     free_pages_  = 0;
+
+    // Lay out one zeroed bitmap per order (8-byte aligned) inside bitmap_storage.
+    uint8_t* p = bitmap_storage;
     for (int o = 0; o <= kMaxOrder; o++) {
-        free_lists_[o] = nullptr;
+        free_bitmap_[o] = reinterpret_cast<uint64_t*>(p);
+        uint64_t bits  = blocks_per_order(o);
+        uint64_t bytes = ((bits + 7) / 8 + 7) & ~static_cast<uint64_t>(7);
+        uint64_t words = bytes / sizeof(uint64_t);
+        for (uint64_t w = 0; w < words; w++)
+            free_bitmap_[o][w] = 0;
+        p += bytes;
     }
-    for (uint64_t p = 0; p < total_pages; p++) {
-        order_[p] = kNotAllocatedHead;  // nothing allocated yet
-    }
+    for (uint64_t i = 0; i < total_pages; i++)
+        order_[i] = kNotAllocatedHead;  // nothing allocated yet
 }
 
 int BuddyAllocator::largest_fitting_order(uint64_t page, uint64_t remaining) {
-    // Greedily take the largest order whose block is both aligned at @p page and
-    // fits within @p remaining.  This keeps the buddy alignment invariant while
-    // naturally absorbing unaligned region edges as smaller-order blocks.
     int o = 0;
     while (o < kMaxOrder) {
         uint64_t next_size = 1ULL << (o + 1);
-        if ((page & (next_size - 1)) == 0 && remaining >= next_size) {
+        if ((page & (next_size - 1)) == 0 && remaining >= next_size)
             o++;
-        } else {
+        else
             break;
-        }
     }
     return o;
 }
@@ -47,70 +61,40 @@ void BuddyAllocator::mark_free_region(uint64_t base_page, uint64_t count) {
     uint64_t end = base_page + count;
     while (p < end) {
         int o = largest_fitting_order(p, end - p);
-        push_free(p, o);
+        set_bit(o, p >> o);
         free_pages_ += (1ULL << o);
         p += (1ULL << o);
     }
 }
 
 // ============================================================
-// Free-list primitives (no free-page accounting here)
+// Bitmap primitives
 // ============================================================
 
-void BuddyAllocator::push_free(uint64_t page, int order) {
-    FreeBlock* b       = page_to_block(page);
-    b->next            = free_lists_[order];
-    free_lists_[order] = b;
-    // order_[page] stays kNotAllocatedHead; free blocks are tracked by the lists.
+void BuddyAllocator::set_bit(int o, uint64_t block) {
+    free_bitmap_[o][block / 64] |= (1ULL << (block % 64));
 }
 
-uint64_t BuddyAllocator::pop_free(int order) {
-    if (free_lists_[order] == nullptr) {
-        return kInvalidPage;
-    }
-    // Low-first: hand out the block with the smallest page index.  The free
-    // lists are LIFO and mark_free_region pushes low->high, so a plain head-pop
-    // would surface the *highest* phys first -- letting allocs/DMA grab phantom
-    // pages beyond real RAM (F2-M7 wiring gotcha).  The direct map is an
-    // identity window, so a lower virtual address is a lower phys.
-    FreeBlock* best      = free_lists_[order];
-    FreeBlock* best_prev = nullptr;
-    FreeBlock* prev      = best;
-    FreeBlock* cur       = best->next;
-    while (cur != nullptr) {
-        if (cur < best) {
-            best      = cur;
-            best_prev = prev;
-        }
-        prev = cur;
-        cur  = cur->next;
-    }
-    if (best_prev == nullptr) {
-        free_lists_[order] = best->next;
-    } else {
-        best_prev->next = best->next;
-    }
-    uint64_t virt = reinterpret_cast<uint64_t>(best);
-    return (virt - base_phys_ - cinux::arch::DIRECT_MAP_BASE) / cinux::arch::PAGE_SIZE;
+void BuddyAllocator::clear_bit(int o, uint64_t block) {
+    free_bitmap_[o][block / 64] &= ~(1ULL << (block % 64));
 }
 
-bool BuddyAllocator::remove_free(uint64_t page, int order) {
-    FreeBlock* target = page_to_block(page);
-    FreeBlock* prev   = nullptr;
-    FreeBlock* cur    = free_lists_[order];
-    while (cur != nullptr) {
-        if (cur == target) {
-            if (prev == nullptr) {
-                free_lists_[order] = cur->next;
-            } else {
-                prev->next = cur->next;
-            }
-            return true;
+bool BuddyAllocator::test_bit(int o, uint64_t block) const {
+    return (free_bitmap_[o][block / 64] >> (block % 64)) & 1ULL;
+}
+
+uint64_t BuddyAllocator::find_first_set(int o) const {
+    uint64_t words = (blocks_per_order(o) + 63) / 64;
+    for (uint64_t w = 0; w < words; w++) {
+        uint64_t v = free_bitmap_[o][w];
+        if (v != 0) {
+            uint64_t bit   = __builtin_ctzll(v);
+            uint64_t block = w * 64 + bit;
+            if (block < blocks_per_order(o))
+                return block;
         }
-        prev = cur;
-        cur  = cur->next;
     }
-    return false;
+    return kInvalidPage;
 }
 
 void BuddyAllocator::mark_head_allocated(uint64_t page, int order) {
@@ -126,26 +110,24 @@ void BuddyAllocator::mark_head_allocated(uint64_t page, int order) {
 // ============================================================
 
 uint64_t BuddyAllocator::alloc_order(int order) {
-    if (order < 0 || order > kMaxOrder) {
+    if (order < 0 || order > kMaxOrder)
         return kInvalidPage;
-    }
 
-    // Find the smallest free list at or above the requested order.
+    // Find the smallest order at or above the request that has a free block.
     int o = order;
-    while (o <= kMaxOrder && free_lists_[o] == nullptr) {
+    while (o <= kMaxOrder && find_first_set(o) == kInvalidPage)
         o++;
-    }
-    if (o > kMaxOrder) {
+    if (o > kMaxOrder)
         return kInvalidPage;  // OOM
-    }
 
-    uint64_t page = pop_free(o);
+    uint64_t block = find_first_set(o);
+    clear_bit(o, block);
+    uint64_t page = block << o;
 
-    // Split the larger block down to the requested order, returning each upper
-    // half to a lower-order free list.  The lower half (head @p page) is kept.
+    // Split down to the requested order: the upper half of each level goes free.
     while (o > order) {
         o--;
-        push_free(page + (1ULL << o), o);
+        set_bit(o, (page + (1ULL << o)) >> o);  // upper half block at this lower order
     }
 
     mark_head_allocated(page, order);
@@ -158,41 +140,31 @@ uint64_t BuddyAllocator::alloc_order(int order) {
 // ============================================================
 
 void BuddyAllocator::free(uint64_t page) {
-    if (page >= total_pages_) {
+    if (page >= total_pages_)
         return;
-    }
     uint8_t recorded = order_[page];
-    if (recorded == kNotAllocatedHead) {
+    if (recorded == kNotAllocatedHead)
         return;  // not an allocated head: double-free / interior / reserved
-    }
     int order = static_cast<int>(recorded);
 
-    // Return the block's pages to the free count and clear its head marker.
     free_pages_ += (1ULL << order);
     uint64_t size = 1ULL << order;
-    for (uint64_t i = 0; i < size && (page + i) < total_pages_; i++) {
+    for (uint64_t i = 0; i < size && (page + i) < total_pages_; i++)
         order_[page + i] = kNotAllocatedHead;
-    }
 
-    // Coalesce with buddies as far as the alignment invariant allows.  The buddy
-    // is mergeable only if it is currently a free block of exactly this order,
-    // which remove_free() decides by unlinking it from that order's list.  If the
-    // buddy is allocated or not a matching free block, stop -- this is correct
-    // (never merges wrongly) and at worst leaves benign fragmentation.  Either
-    // way the free-page count above is already exact.
+    // Coalesce with buddies as far as the alignment invariant allows.
     while (order < kMaxOrder) {
         uint64_t b = buddy_of(page, order);
-        if (b >= total_pages_) {
+        if (b >= total_pages_)
             break;  // buddy outside the managed range (region edge)
-        }
-        if (!remove_free(b, order)) {
+        if (!test_bit(order, b >> order))
             break;  // buddy not a free block of this order -> cannot merge
-        }
+        clear_bit(order, b >> order);
         page = (b < page) ? b : page;  // merged block head is the lower address
         order++;
     }
 
-    push_free(page, order);
+    set_bit(order, page >> order);
 }
 
 }  // namespace cinux::mm
