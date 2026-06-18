@@ -196,6 +196,9 @@ struct Task {
 
     /** Per-process current working directory (absolute path, NUL-terminated). */
     char cwd[256];
+
+    /** Intrusive link for the global pid->Task registry (sys_kill lookup). */
+    Task* registry_next{nullptr};
 };
 
 // ============================================================

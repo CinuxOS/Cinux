@@ -12,9 +12,28 @@
 
 #include "big_kernel_test.h"
 #include "kernel/proc/process.hpp"
+#include "kernel/proc/scheduler.hpp"
 #include "kernel/proc/signal.hpp"
+#include "kernel/syscall/sys_signal.hpp"
 
 using namespace cinux::proc;
+using cinux::syscall::UserSigAction;
+using cinux::syscall::sys_kill;
+using cinux::syscall::sys_rt_sigaction;
+using cinux::syscall::sys_rt_sigprocmask;
+
+namespace {
+
+/// RAII: install @p task as current, restore the previous on destruction.
+struct CurrentTaskGuard {
+    cinux::proc::Task* prev;
+    explicit CurrentTaskGuard(cinux::proc::Task* task) : prev(cinux::proc::Scheduler::current()) {
+        cinux::proc::Scheduler::set_current(task);
+    }
+    ~CurrentTaskGuard() { cinux::proc::Scheduler::set_current(prev); }
+};
+
+}  // namespace
 
 // ============================================================
 // Signal-set bitmask operations
@@ -115,6 +134,131 @@ void test_task_has_signal_fields() {
 }  // namespace test_sig_state
 
 // ============================================================
+// Delivery: send / pick / syscalls (F3-M1 batch 2)
+// ============================================================
+
+namespace test_sig_send {
+
+void test_send_sets_pending() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    t.pid = 1;
+    TEST_ASSERT_EQ(signal_send(&t, Signal::kSigterm), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSigterm));
+}
+
+void test_send_ignored_is_discarded() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    t.pid                                                  = 1;
+    t.sig_actions[static_cast<int>(Signal::kSigchld)].type = HandlerType::kIgnore;
+    TEST_ASSERT_EQ(signal_send(&t, Signal::kSigchld), 0);
+    TEST_ASSERT_FALSE(sig_is_member(t.sig_pending, Signal::kSigchld));  // discarded
+}
+
+void test_send_uncatchable_overrides_ignore() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    t.pid                                                  = 1;
+    t.sig_actions[static_cast<int>(Signal::kSigkill)].type = HandlerType::kIgnore;
+    TEST_ASSERT_EQ(signal_send(&t, Signal::kSigkill), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSigkill));  // SIGKILL not ignored
+}
+
+}  // namespace test_sig_send
+
+namespace test_sig_pick {
+
+void test_pick_clears_and_respects_block() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    sig_set_add(t.sig_pending, Signal::kSigterm);
+    sig_set_add(t.sig_blocked, Signal::kSigterm);  // blocked
+    TEST_ASSERT_EQ(signal_pick_deliverable(&t), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSigterm));  // still pending
+
+    sig_set_del(t.sig_blocked, Signal::kSigterm);  // unblock
+    TEST_ASSERT_EQ(signal_pick_deliverable(&t), static_cast<int>(Signal::kSigterm));
+    TEST_ASSERT_FALSE(sig_is_member(t.sig_pending, Signal::kSigterm));  // cleared
+}
+
+void test_pick_skips_custom() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    sig_set_add(t.sig_pending, Signal::kSigterm);
+    t.sig_actions[static_cast<int>(Signal::kSigterm)].type = HandlerType::kCustom;
+    // Custom handlers need a signal frame (batch 3); left pending.
+    TEST_ASSERT_EQ(signal_pick_deliverable(&t), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSigterm));
+}
+
+}  // namespace test_sig_pick
+
+namespace test_sig_syscall {
+
+void test_sigaction_install_and_query() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    UserSigAction    act{};
+    act.sa_handler = 0xDEADBEEFu;
+    act.sa_mask    = sig_make_mask(Signal::kSigint);
+    TEST_ASSERT_EQ(sys_rt_sigaction(static_cast<uint64_t>(Signal::kSigusr1),
+                                    reinterpret_cast<uint64_t>(&act), 0, 0, 0, 0),
+                   0);
+    const SigAction& installed = t.sig_actions[static_cast<int>(Signal::kSigusr1)];
+    TEST_ASSERT_EQ(installed.type, HandlerType::kCustom);
+    TEST_ASSERT_EQ(installed.handler_addr, uint64_t{0xDEADBEEF});
+
+    UserSigAction old{};
+    TEST_ASSERT_EQ(sys_rt_sigaction(static_cast<uint64_t>(Signal::kSigusr1), 0,
+                                    reinterpret_cast<uint64_t>(&old), 0, 0, 0),
+                   0);
+    TEST_ASSERT_EQ(old.sa_handler, uint64_t{0xDEADBEEF});
+}
+
+void test_sigaction_rejects_uncatchable() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    UserSigAction    act{};
+    act.sa_handler = 0xDEADBEEFu;
+    TEST_ASSERT_EQ(sys_rt_sigaction(static_cast<uint64_t>(Signal::kSigkill),
+                                    reinterpret_cast<uint64_t>(&act), 0, 0, 0, 0),
+                   -22);  // EINVAL: cannot catch SIGKILL
+}
+
+void test_sigprocmask_block_unblock() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    uint64_t         mask = sig_make_mask(Signal::kSigterm);
+    TEST_ASSERT_EQ(
+        sys_rt_sigprocmask(0 /*SIG_BLOCK*/, reinterpret_cast<uint64_t>(&mask), 0, 0, 0, 0), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_blocked, Signal::kSigterm));
+    TEST_ASSERT_EQ(
+        sys_rt_sigprocmask(1 /*SIG_UNBLOCK*/, reinterpret_cast<uint64_t>(&mask), 0, 0, 0, 0), 0);
+    TEST_ASSERT_FALSE(sig_is_member(t.sig_blocked, Signal::kSigterm));
+}
+
+void test_sigprocmask_cannot_block_sigkill() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    uint64_t         mask = sig_make_mask(Signal::kSigkill);
+    sys_rt_sigprocmask(0, reinterpret_cast<uint64_t>(&mask), 0, 0, 0, 0);
+    TEST_ASSERT_FALSE(sig_is_member(t.sig_blocked, Signal::kSigkill));
+}
+
+void test_kill_self_pends() {
+    Task             t{};
+    CurrentTaskGuard guard(&t);
+    t.pid = 42;
+    TEST_ASSERT_EQ(sys_kill(0, static_cast<uint64_t>(Signal::kSigusr2), 0, 0, 0, 0), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSigusr2));
+    TEST_ASSERT_EQ(sys_kill(42, static_cast<uint64_t>(Signal::kSighup), 0, 0, 0, 0), 0);
+    TEST_ASSERT_TRUE(sig_is_member(t.sig_pending, Signal::kSighup));
+}
+
+}  // namespace test_sig_syscall
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -128,6 +272,17 @@ extern "C" void run_signal_tests() {
     RUN_TEST(test_sig_meta::test_valid);
     RUN_TEST(test_sig_state::test_sigaction_default_ctor);
     RUN_TEST(test_sig_state::test_task_has_signal_fields);
+
+    RUN_TEST(test_sig_send::test_send_sets_pending);
+    RUN_TEST(test_sig_send::test_send_ignored_is_discarded);
+    RUN_TEST(test_sig_send::test_send_uncatchable_overrides_ignore);
+    RUN_TEST(test_sig_pick::test_pick_clears_and_respects_block);
+    RUN_TEST(test_sig_pick::test_pick_skips_custom);
+    RUN_TEST(test_sig_syscall::test_sigaction_install_and_query);
+    RUN_TEST(test_sig_syscall::test_sigaction_rejects_uncatchable);
+    RUN_TEST(test_sig_syscall::test_sigprocmask_block_unblock);
+    RUN_TEST(test_sig_syscall::test_sigprocmask_cannot_block_sigkill);
+    RUN_TEST(test_sig_syscall::test_kill_self_pends);
 
     TEST_SUMMARY();
 }

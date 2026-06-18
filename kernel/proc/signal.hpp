@@ -118,4 +118,39 @@ SigDefault signal_default_action(Signal sig);
 /// SIGKILL and SIGSTOP cannot be caught, blocked, or ignored.
 bool signal_is_uncatchable(Signal sig);
 
+// ============================================================
+// Task registry (pid -> Task* lookup, used by sys_kill)
+// ============================================================
+
+struct Task;  // full definition in process.hpp (which includes this header)
+
+/// Add @p task to the signal-visible registry (called from add_task).
+void signal_register_task(Task* task);
+
+/// Remove @p task from the registry (called from remove_task / exit_current).
+void signal_unregister_task(Task* task);
+
+/// Look up a task by PID, or nullptr if not registered.
+Task* signal_find_task_by_pid(int pid);
+
+// ============================================================
+// Delivery (F3-M1 batch 2; custom-handler frames arrive in batch 3)
+// ============================================================
+
+/// Queue @p sig on @p target's pending set.  Returns 0 / -errno.
+int signal_send(Task* target, Signal sig);
+
+/// Pick the next deliverable signal for @p task (Default/Ignore only; Custom
+/// is deferred to batch 3), clear its pending bit, return its number.
+/// Returns 0 when nothing is deliverable.
+int signal_pick_deliverable(Task* task);
+
+/// Apply the default disposition for @p sig on @p task.  May terminate the
+/// task (does not return in that case).
+void signal_exec_default(Task* task, Signal sig);
+
+/// Top-level delivery entry: pick and act on one pending signal for the
+/// current task.  Called on the return-to-user path.
+void signal_check_and_deliver();
+
 }  // namespace cinux::proc
