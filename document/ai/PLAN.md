@@ -8,6 +8,7 @@
 > **F2-M7 Buddy PMM ✅ 完成（2026-06-18，fresh KVM 742/0 + GUI 冒烟）**：buddy 伙伴系统替换 PMM flat bitmap（per-order bitmap free-list，非侵入式）。Bug1（direct-map reserved PF，批3）+ Bug2（WSL2 nested KVM 对侵入式 free-list 写读不一致，改 bitmap 解，GOTCHA#14）均修。**详见下方「F2-M7 Buddy PMM」段 + `document/notes/2026-06-17-f2-m7-direct-map-buddy-handoff.md`**。solid 基线 = main（M6 #12，734）。F2 进度 7/7 + M7b（M1-M7 ✅，**M7b SLAB ✅ 完成 2026-06-18**：kmalloc 全替 Heap + 专用缓存 Task/VMA/CachedPage，见下方「F2-M7b」段）。
 > **FO 可观测性/调试基建 ✅ 完成（2026-06-18，763/0 + panic 冒烟）**：frame pointer + KALLSYMS lookup + 防御 backtrace + 统一 panic handler（收编 dump_registers/kpanic/fatal_halt + backtrace + memstats）+ dump_memory_stats。关键 GOTCHA：`CMAKE_BUILD_TYPE` 默认空(-O0)→ 首次 -O2 Release 验证全绿（建议 CI 加 -O2 门禁）；`VMM::translate()` 不支持 huge 页 → backtrace 改栈范围检查；kprintf 不支持 `%zu`。**M5 崩溃持久化推迟**（持久化层前提不满足）、**1b 真实符号注入 follow-up**（CMake 两阶段，裸地址+addr2line 降级）。详见 `document/notes/2026-06-18-fo-observability.md`。
 > **F3-M1 信号系统 ✅ 完成（2026-06-18，5 批，763→783）**：核心 POSIX 信号（Signal/SigSet/SigAction）+ 投递（send/pick/check_and_deliver）+ kill/sigaction/sigprocmask/sigreturn + Custom handler round-trip（中断路径 + int $0x80 trampoline）+ 集成（PF→SIGSEGV/exit→SIGCHLD/write→SIGPIPE）。详见下方「F3-M1 信号」段 + `document/notes/2026-06-18-f3-m1-signals.md`。
+> **F3-M2 线程支持（clone + futex + TLS）🔄 NEXT（propose 已确认 2026-06-18）**：为 musl/pthread 打内核地基。**决策：共享资源走 refcount 指针化（非 MVP 拷贝）**——sig_actions/fd_table/cwd 重构为引用计数共享对象（CLONE_SIGHAND/FILES/FS 真共享，POSIX 正确）；futex = WAIT/WAKE + BITSET。5 批：①TLS(fs_base) ②futex ③共享 refcount 基建+retrofit fork ④线程组+clone 核心 ⑤集成 cleartid+libc+闭环。详见文末「🔄 F3-M2」段。**R1 风险：clone 子进程用户栈返回（syscall.S 帧 user_rsp 槽 patch）→ GOTCHA#17**。
 > 状态：✅ DONE / 🔄 NEXT / ⏳ PENDING / ⛔ BLOCKED。每批≈一 commit，完成门 `run-kernel-test` 全绿。
 
 ## ✅ M2（内核日志）已完成 — 2026-06-16
@@ -276,3 +277,31 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 关键教训 **GOTCHA#16**（sigreturn 栈注入依赖 NXE 关闭 + Custom 走中断路径 + signal_check_deliver_isr 严判 cs&3）。
 
 验证：fresh run-kernel-test 763→**783/0**（+20 signal 单测）+ 实机 `make run` 生产内核启动到 GUI 桌面（Desktop icons / gui_worker），signal_check_deliver_isr 在每个中断（PIT/AHCI）后高频跑全程不炸，kernel_init exit→SIGCHLD 投递不炸。**Custom handler 真用户态 round-trip 留后续**（libc wrapper 已就绪，需用户程序触发）。下个焦点：F3-M2 clone + futex + TLS。
+
+## 🔄 F3-M2（线程支持：clone + futex + TLS）— NEXT（propose 已确认 2026-06-18）
+
+> 目标：为 musl/pthread 打内核地基——`clone`(56) Linux 风格线程原语 + `futex`(202) 用户态互斥 + TLS（FS 段基址 MSR_FS_BASE）+ 线程组（tgid / CLONE_CHILD_CLEARTID exit futex_wake）。
+> 决策（propose 已确认）：
+> - **#1 共享资源 refcount 指针化（非 MVP 拷贝）**：sig_actions / fd_table / cwd 都重构为引用计数共享对象。CLONE_SIGHAND/FILES/FS 真共享（POSIX 正确，musl pthread 带这些 flag）；fork 仍 copy 语义（fork 不带 CLONE_*，子建新对象）。代价：批3 重构侵入 signal.cpp/fork/所有 sig_actions+cwd 访问点，但批4 clone 才能正确共享。
+> - **#2 futex = WAIT/WAKE + BITSET**（多 uint32 掩码匹配，pthread 条件变量用）；**不做** timeout（需 PIT timer 定时唤醒）/ PI / requeue。
+> - **#3 clone 子进程用户栈返回**：复用 fork「拷父核栈 + relativize + trampoline」机制，patch 拷贝帧的 user_rsp 槽 = `stack` 参数（syscall.S 帧 `rsp+0=user_rsp`，via fork delta 相对化定位）。备选 Approach C（clone_child_trampoline 直跳用户态复用 jump_to_usermode）若 patch 太脆。
+> 不做：futex timeout/PI/requeue、实时信号线程语义、job-control 真调度、进程组 kill（F3-M3）。
+> 依赖就绪：M1 信号（mask 继承）、F2 mmap（线程栈）、scheduler block/unblock、Spinlock、ErrorOr、next_tid、per_cpu。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| 批1 | **TLS（fs_base）**：`CpuContext` 加 `fs_base`(offset 80, sizeof 80→88)+static_assert；context_switch.S 存/恢复 fs_base(MSR_FS_BASE=0xC0000100) 与 gs_base 同段；`kernel/arch/x86_64/tls.{hpp,cpp}` `cinux::arch::set/get_tls_base`(wrmsr/rdmsr)；fork child ctx 显式 fs_base；单测 round-trip | 🔄 | — | — |
+| 批2 | **futex**：`sys_futex.{hpp,cpp}` 256-bucket hash + 侵入式 Waiter(`Task::wait_next`)+Spinlock（镜像 Mutex/Semaphore 的 block/unblock 范式）；FUTEX_WAIT(copy_from_user 读 `*uaddr`，≠val 返 EAGAIN，入队→Scheduler::block，醒后出队返 0)/WAKE(出队最多 val→unblock，返唤醒数)/BITSET(uint32 掩码匹配)；注册 SYS_futex=202；单测 | ⏳ | — | — |
+| 批3 | **共享资源 refcount 基建 + retrofit fork**：`SharedSigActions`(refcounted 堆对象持 SigAction[23]，Task 指针化，signal.cpp/fork/所有 `sig_actions[n]` 访问改 `->actions[n]`) + `FDTable` 加 refcount(acquire/release) + `SharedCwd`(refcounted 指针化，getcwd/chdir/execve/fork 全访问点改)；fork copy 语义建新对象；acquire/release + 单测 | ⏳ | — | — |
+| 批4 | **线程组 + clone 核心**：Task 加 `tgid`/`group_leader`/`clear_child_tid`/`set_child_tid`；fork 设 tgid=child pid（新进程自身组长）；`sys_getpid` 返 tgid（单线程==pid 向后兼容）；`sys_clone.{hpp,cpp}`+CLONE_* 常量+clone()（复用 fork 拷核栈机制）；CLONE_VM(共享 AS 不 CoW,switch_addr_space 已跳同 AS)/FILES(共享 fd_table 批3)/SIGHAND(共享 SharedSigActions)/FS(共享 SharedCwd)/THREAD(tgid=父 tgid,ppid=父 ppid,parent=父的 parent)/SETTLS(set_tls_base)/SETTID/CLEARTID(记 clear_child_tid)；**子进程用户栈返回**（patch 帧 user_rsp 槽，GOTCHA#17）；注册 SYS_clone=56；单测；实机冒烟 | ⏳ | — | — |
+| 批5 | **集成 cleartid + libc + 闭环 + 收尾**：CLONE_CHILD_CLEARTID exit/线程退出→写 0 到 clear_child_tid + futex_wake（tgid 内线程退出语义）；`user/libc/syscall.{h,c}` clone/futex wrapper + CLONE_* 用户常量；端到端测（clone 线程 + futex 同步 round-trip）；ROADMAP/PLAN/todo/notes + GOTCHA；fresh run-kernel-test + 实机 GUI 冒烟 | ⏳ | — | — |
+
+**架构契合**：A 翻译边界（clone/futex 返 -errno：EAGAIN/EINVAL/ESRCH/ENOMEM，内核内 ErrorOr，仅 trap 入口翻 errno）；A 禁 RTTI（按字段共享，无 dynamic_cast）；A.7 不入 Cinux-Base（依赖 PMM/VMM/scheduler/heap）；层化 arch(tls)/proc/scheduler/syscall 各司其职不反向依赖；对齐 Linux（clone flags/FUTEX op/线程组语义，CONFIG 风格不重造轮子）。
+
+**风险**：
+- **R1（最高）clone 子进程用户栈返回**：syscall.S 帧 `rsp+0=user_rsp / rsp+8=user_rip`，子进程拷来的帧须把 user_rsp 槽 patch 成 `stack` 参数（用 fork 现成 delta 相对化 `(child_addr = parent_slot - current_rsp + child_stack_start)`）。批4 实测验证；备选 Approach C（clone_child_trampoline 直跳用户态，复用 jump_to_usermode）。
+- **R2 共享 refcount 生命周期**：线程 exit 不释放共享表（fd/sig/cwd），仅 group-leader 进程 exit 最后 release 到 0 才释放。retrofit fork 须保 fork copy 语义不破现有测试。
+- **R3 启动路径**：Task 结构变（新字段 + sig_actions/cwd 指针化）+ context_switch.S 变 → run-kernel-test 全 kernel-mode 不覆盖 ring3 线程路径，实机冒烟必做（GOTCHA#11 同类）。
+- **R4 futex 无 timeout**：FUTEX_WAIT 无限等，waker 必须存在；测试用 2 task（一 wait 一 wake）配对。
+
+**GOTCHA（新增预留）**：#17 clone 子进程用户栈返回（帧 user_rsp 槽 patch）+ 共享 refcount 生命周期（线程 exit 不释放共享表，进程 exit 最后释放）。
