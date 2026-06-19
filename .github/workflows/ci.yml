@@ -65,7 +65,13 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCINUX_BUILD_TESTS=ON -S .
 
       - name: Build
-        run: cmake --build build -j$(nproc)
+        # Build twice: the first pass seeds the KALLSYMS table stub and its
+        # POST_BUILD step regenerates the real table from nm; the second pass
+        # compiles the real table into the test kernel (F-INFRA I-5). Without
+        # the second pass the kernel runs with an empty symbol table.
+        run: |
+          cmake --build build -j$(nproc)
+          cmake --build build -j$(nproc)
 
       - name: Run kernel tests
         working-directory: build

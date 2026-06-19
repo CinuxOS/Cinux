@@ -227,3 +227,47 @@ add_custom_command(TARGET big_kernel_test POST_BUILD
     COMMAND python3 ${CMAKE_SOURCE_DIR}/scripts/append_crc32.py ${BIG_KERNEL_TEST_BIN}
     COMMENT "Creating big kernel test binary with trailing CRC32"
 )
+
+# ============================================================
+# F-INFRA I-5: KALLSYMS symbol table (per-target, POST_BUILD regen)
+# ============================================================
+# Each kernel executable embeds its own {addr,name} table so panic backtraces
+# resolve to function names without host addr2line. linker.ld places .rodata
+# (where this table lands) AFTER .text, so adding the table never moves any
+# recorded function address: a single nm pass over the linked ELF is correct,
+# and the POST_BUILD regeneration converges. The generator writes ONLY when
+# content changes (preserves mtime), so once stable it triggers no rebuild.
+set(KALLSYMS_GEN        ${CMAKE_SOURCE_DIR}/scripts/generate_kallsyms.py)
+set(KALLSYMS_DATA_TEST  ${CMAKE_BINARY_DIR}/kernel/kallsyms_data_test.cpp)
+set(KALLSYMS_DATA_KERNEL ${CMAKE_BINARY_DIR}/kernel/kallsyms_data_kernel.cpp)
+
+# Seed an empty stub at configure time so the first build compiles. A clean
+# checkout therefore needs a second build for the real table to be compiled in
+# (CI builds twice). Guarded: do NOT overwrite a previously-regenerated real
+# table on reconfigure.
+set(_KALLSYMS_STUB [==[
+// AUTO-GENERATED placeholder (first build); regenerated POST_BUILD from nm.
+#include <stddef.h>
+#include "kernel/lib/kallsyms.hpp"
+extern "C" const cinux::lib::KallsymEntry g_kallsyms_table[] = {};
+extern "C" const size_t g_kallsyms_count = 0;
+]==])
+if(NOT EXISTS ${KALLSYMS_DATA_TEST})
+    file(WRITE ${KALLSYMS_DATA_TEST} "${_KALLSYMS_STUB}")
+endif()
+if(NOT EXISTS ${KALLSYMS_DATA_KERNEL})
+    file(WRITE ${KALLSYMS_DATA_KERNEL} "${_KALLSYMS_STUB}")
+endif()
+
+target_sources(big_kernel      PRIVATE ${KALLSYMS_DATA_KERNEL})
+target_sources(big_kernel_test PRIVATE ${KALLSYMS_DATA_TEST})
+set_source_files_properties(${KALLSYMS_DATA_KERNEL} ${KALLSYMS_DATA_TEST}
+                            PROPERTIES GENERATED TRUE)
+
+# Regenerate each table from its own linked ELF after every build.
+add_custom_command(TARGET big_kernel POST_BUILD
+    COMMAND python3 ${KALLSYMS_GEN} $<TARGET_FILE:big_kernel> ${KALLSYMS_DATA_KERNEL}
+    COMMENT "KALLSYMS: regenerate big_kernel symbol table")
+add_custom_command(TARGET big_kernel_test POST_BUILD
+    COMMAND python3 ${KALLSYMS_GEN} $<TARGET_FILE:big_kernel_test> ${KALLSYMS_DATA_TEST}
+    COMMENT "KALLSYMS: regenerate big_kernel_test symbol table")
