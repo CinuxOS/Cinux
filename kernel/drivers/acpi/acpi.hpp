@@ -91,4 +91,94 @@ const RSDP* find_rsdp();
 /// @return  Matching table via the direct map, or nullptr if not found.
 const SDTHeader* find_table(const char* signature);
 
+// ============================================================
+// MADT (Multiple APIC Description Table, signature "APIC")
+// ============================================================
+
+/// MADT flags bit 0: a PC-AT-compatible 8259 PIC is present.
+constexpr uint8_t kMadtPcatCompat = 0x01;
+
+/// MADT header: the common SDT header, the Local APIC base address and flags,
+/// then a variable-length list of Interrupt Controller Structures.
+struct [[gnu::packed]] MADTHeader {
+    SDTHeader header;
+    uint32_t  local_apic_address;  ///< Local APIC MMIO base (32-bit, < 4 GB)
+    uint32_t  flags;               ///< bit 0 = PC-AT-compatible 8259 present
+};
+
+/// Common prefix of every Interrupt Controller Structure (ICS) entry.
+struct [[gnu::packed]] ICSHeader {
+    uint8_t type;
+    uint8_t length;  ///< total entry size, including this header
+};
+
+/// ICS type codes (subset -- only the entries M1-3 consumes).
+constexpr uint8_t kIcsProcessorLocalApic      = 0;
+constexpr uint8_t kIcsIoapic                  = 1;
+constexpr uint8_t kIcsInterruptSourceOverride = 2;
+
+/// Processor Local APIC (ICS type 0).
+struct [[gnu::packed]] ProcessorLocalAPICEntry {
+    uint8_t  type;    ///< 0
+    uint8_t  length;  ///< 8
+    uint8_t  processor_id;
+    uint8_t  apic_id;  ///< Local APIC ID (IPI target)
+    uint32_t flags;    ///< bit 0 = enabled, bit 1 = online capable
+};
+
+/// I/O APIC (ICS type 1).
+struct [[gnu::packed]] IOAPICEntry {
+    uint8_t  type;    ///< 1
+    uint8_t  length;  ///< 12
+    uint8_t  ioapic_id;
+    uint8_t  reserved;
+    uint32_t ioapic_address;  ///< I/O APIC MMIO base (32-bit)
+    uint32_t gsi_base;        ///< global system interrupt base
+};
+
+/// Interrupt Source Override (ICS type 2): maps an ISA IRQ to a GSI.
+struct [[gnu::packed]] InterruptSourceOverrideEntry {
+    uint8_t  type;        ///< 2
+    uint8_t  length;      ///< 10
+    uint8_t  bus;         ///< 0 = ISA
+    uint8_t  source_irq;  ///< ISA IRQ 0-15 being remapped
+    uint32_t global_irq;  ///< GSI it maps to
+    uint16_t flags;       ///< polarity (bits 0-1) + trigger mode (bits 2-3)
+};
+
+/// Upper bound on CPUs we record from the MADT.
+constexpr size_t kMaxCpus = 16;
+
+/// Decoded ACPI information consumed by M2 (APIC init).
+struct ACPIInfo {
+    uint64_t local_apic_address;  ///< LAPIC MMIO base (0xFEE00000 on QEMU)
+    uint64_t ioapic_address;      ///< first I/O APIC MMIO base (0xFEC00000); 0 if none
+    uint32_t ioapic_gsi_base;     ///< GSI base of the first I/O APIC
+    bool     has_ioapic;
+    bool     has_pcat_compat;  ///< 8259 PIC present (affects IRQ0 override)
+
+    uint8_t  cpu_apic_ids[kMaxCpus];  ///< APIC IDs of enabled CPUs
+    uint32_t cpu_count;
+
+    /// One ISA IRQ -> GSI override (QEMU typically remaps IRQ0 -> GSI2).
+    struct IrqOverride {
+        uint8_t  source_irq;
+        uint32_t global_irq;
+        uint16_t flags;
+    };
+    IrqOverride irq_overrides[16];
+    uint32_t    irq_override_count;
+};
+
+/// Parse the MADT into ACPIInfo.
+///
+/// Walks the ICS entries after the MADT header, collecting enabled CPU APIC
+/// IDs, the first I/O APIC base/gsi_base, the PC-AT-compat flag, and the ISA
+/// IRQ source overrides.  Entries of unknown type (NMI, LAPIC NMI, x2APIC...)
+/// are skipped.
+///
+/// @param madt  MADT via the direct map (from find_table("APIC")), or nullptr.
+/// @return      Decoded info; cpu_count==0 if the table is absent/invalid.
+ACPIInfo parse_madt(const SDTHeader* madt);
+
 }  // namespace cinux::drivers::acpi

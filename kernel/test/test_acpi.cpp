@@ -14,10 +14,12 @@
 #include "big_kernel_test.h"
 #include "kernel/drivers/acpi/acpi.hpp"
 
+using cinux::drivers::acpi::ACPIInfo;
 using cinux::drivers::acpi::RSDP;
 using cinux::drivers::acpi::SDTHeader;
 using cinux::drivers::acpi::find_rsdp;
 using cinux::drivers::acpi::find_table;
+using cinux::drivers::acpi::parse_madt;
 using cinux::drivers::acpi::validate_checksum;
 
 // ============================================================
@@ -158,6 +160,62 @@ void test_find_unknown_returns_null() {
 }  // namespace test_acpi_find_table
 
 // ============================================================
+// MADT parsing (M1-3)
+// ============================================================
+namespace test_acpi_madt {
+
+void test_parse_madt_finds_cpus() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    ACPIInfo info = parse_madt(madt);
+    // QEMU default -smp is 1, so at least the BSP is present.
+    TEST_ASSERT_TRUE(info.cpu_count >= 1);
+}
+
+void test_parse_madt_lapic_address() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    ACPIInfo info = parse_madt(madt);
+    TEST_ASSERT_TRUE(info.local_apic_address == 0xFEE00000);
+}
+
+void test_parse_madt_ioapic_present() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    ACPIInfo info = parse_madt(madt);
+    TEST_ASSERT_TRUE(info.has_ioapic);
+    TEST_ASSERT_TRUE(info.ioapic_address == 0xFEC00000);
+}
+
+void test_parse_madt_pcat_compat() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    ACPIInfo info = parse_madt(madt);
+    // QEMU exposes the 8259 PIC for legacy compatibility.
+    TEST_ASSERT_TRUE(info.has_pcat_compat);
+}
+
+void test_parse_madt_null_is_empty() {
+    ACPIInfo info = parse_madt(nullptr);
+    TEST_ASSERT_TRUE(info.cpu_count == 0);
+    TEST_ASSERT_FALSE(info.has_ioapic);
+}
+
+}  // namespace test_acpi_madt
+
+// ============================================================
 // Entry point
 // ============================================================
 extern "C" void run_acpi_tests() {
@@ -179,6 +237,12 @@ extern "C" void run_acpi_tests() {
     RUN_TEST(test_acpi_find_table::test_found_madt_signature_matches);
     RUN_TEST(test_acpi_find_table::test_found_madt_length_sane);
     RUN_TEST(test_acpi_find_table::test_find_unknown_returns_null);
+
+    RUN_TEST(test_acpi_madt::test_parse_madt_finds_cpus);
+    RUN_TEST(test_acpi_madt::test_parse_madt_lapic_address);
+    RUN_TEST(test_acpi_madt::test_parse_madt_ioapic_present);
+    RUN_TEST(test_acpi_madt::test_parse_madt_pcat_compat);
+    RUN_TEST(test_acpi_madt::test_parse_madt_null_is_empty);
 
     TEST_SUMMARY();
 }
