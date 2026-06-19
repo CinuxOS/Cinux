@@ -30,6 +30,7 @@
 extern "C" {
 void run_gdt_idt_tests();
 void run_pic_pit_tests();
+void run_acpi_tests();
 void run_video_tests();
 void run_keyboard_tests();
 void run_pmm_tests();
@@ -151,6 +152,7 @@ extern "C" void kernel_main() {
     run_gdt_idt_tests();
     run_pic_pit_tests();
     run_keyboard_tests();
+    run_acpi_tests();
 
     // PMM tests: initialise with real BootInfo, then run tests
     auto* boot_info = reinterpret_cast<const BootInfo*>(BOOT_INFO_PHYS);
