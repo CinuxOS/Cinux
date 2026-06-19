@@ -80,4 +80,15 @@ bool validate_checksum(const void* table, size_t len);
 /// @return  RSDP via the direct map, or nullptr if not found / invalid.
 const RSDP* find_rsdp();
 
+/// Find an ACPI table by its 4-byte signature (e.g. "APIC", "FACP", "HPET").
+///
+/// Walks the RSDT (ACPI 1.0, 32-bit entries) or XSDT (ACPI 2.0+, 64-bit
+/// entries) pointed to by the RSDP, validates each candidate's checksum, and
+/// returns the first table whose signature matches.  QEMU's default 'pc'
+/// machine uses the RSDT path (rev 0).
+///
+/// @param signature  Exactly 4 bytes compared (not NUL-terminated).
+/// @return  Matching table via the direct map, or nullptr if not found.
+const SDTHeader* find_table(const char* signature);
+
 }  // namespace cinux::drivers::acpi

@@ -15,7 +15,9 @@
 #include "kernel/drivers/acpi/acpi.hpp"
 
 using cinux::drivers::acpi::RSDP;
+using cinux::drivers::acpi::SDTHeader;
 using cinux::drivers::acpi::find_rsdp;
+using cinux::drivers::acpi::find_table;
 using cinux::drivers::acpi::validate_checksum;
 
 // ============================================================
@@ -113,6 +115,49 @@ void test_rsdp_xsdt_address_when_acpi2() {
 }  // namespace test_acpi_rsdp
 
 // ============================================================
+// find_table signature lookup (M1-2)
+// ============================================================
+namespace test_acpi_find_table {
+
+void test_find_apic_finds_madt() {
+    // MADT (Multiple APIC Description Table) is signed "APIC"; M1-3 parses it.
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+}
+
+void test_find_facp_finds_fadt() {
+    const SDTHeader* fadt = find_table("FACP");
+    TEST_ASSERT_NOT_NULL(fadt);
+}
+
+void test_found_madt_signature_matches() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    TEST_ASSERT_TRUE(madt->signature[0] == 'A' && madt->signature[1] == 'P' &&
+                     madt->signature[2] == 'I' && madt->signature[3] == 'C');
+}
+
+void test_found_madt_length_sane() {
+    const SDTHeader* madt = find_table("APIC");
+    TEST_ASSERT_NOT_NULL(madt);
+    if (madt == nullptr) {
+        return;
+    }
+    // MADT = header(36) + local_apic_address(4) + flags(4) + ICS entries.
+    TEST_ASSERT_TRUE(madt->length >= sizeof(SDTHeader) + 8);
+}
+
+void test_find_unknown_returns_null() {
+    const SDTHeader* t = find_table("ZZZZ");
+    TEST_ASSERT_NULL(t);
+}
+
+}  // namespace test_acpi_find_table
+
+// ============================================================
 // Entry point
 // ============================================================
 extern "C" void run_acpi_tests() {
@@ -128,6 +173,12 @@ extern "C" void run_acpi_tests() {
     RUN_TEST(test_acpi_rsdp::test_rsdp_revision_valid);
     RUN_TEST(test_acpi_rsdp::test_rsdp_rsdt_address_present);
     RUN_TEST(test_acpi_rsdp::test_rsdp_xsdt_address_when_acpi2);
+
+    RUN_TEST(test_acpi_find_table::test_find_apic_finds_madt);
+    RUN_TEST(test_acpi_find_table::test_find_facp_finds_fadt);
+    RUN_TEST(test_acpi_find_table::test_found_madt_signature_matches);
+    RUN_TEST(test_acpi_find_table::test_found_madt_length_sane);
+    RUN_TEST(test_acpi_find_table::test_find_unknown_returns_null);
 
     TEST_SUMMARY();
 }
