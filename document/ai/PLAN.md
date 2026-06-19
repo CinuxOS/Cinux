@@ -64,21 +64,21 @@
 > **P1-2 关键发现:原设计低估 swapgs 牵连**——ISR(interrupts.S)无 swapgs(仅 syscall.S 有),中断从用户态进入 GS_BASE=0 而 `schedule()→percpu()` 在中断上下文 → percpu() 读 MSR 会崩。改走**完整 swapgs 纪律**(Option A):ISR 宏按帧内 CS 判 CPL=3 条件 swapgs(entry RSP+144 / exit RSP+136,%rax scratch)。**usermode_init 提前到 IDT 后**(原在 sync 测试之后,P1-2 后会崩)。已知局限:NMI/#DB 在 syscall-exit swapgs 窗口(Linux paranoid 路径留 follow-up)。详见 `document/notes/2026-06-19-f4-m3-p1-2-swapgs-discipline.md`。
 > P1-1 GOTCHA:gs 页双镜像(P1-1 过渡,GS 未动 → syscall 仍读 gs 页 → update_syscall_stack 双写 percpu+gs 页;P1-2 才并入);测试 `percpu()->current = t` 忠实迁移(非 set_current)。详见 `document/notes/2026-06-19-f4-m3-p1-1-percpu-block.md`。
 
-## 🔄 F4-M3 Phase 2(AP 启动 / SMP 双核)— 执行中 — 2026-06-19
+## ✅ F4-M3 Phase 2(AP 启动 / SMP 双核)完成 — 2026-06-19
 
-> **目标:`-smp 2` 双核 AP online + idle(AP 不跑用户任务,留 M4)。** F4 最难里程碑(trampoline 单点最高风险)。分支 `feat/f4-m3-ap-boot`(从 main)。
+> **`-smp 2` 双核 AP online + idle 达成。** F4 最难里程碑(trampoline 首次实跑即通)。分支 `feat/f4-m3-trampoline`(从 main 拉,P2-1 已合 main PR#22)。3 commit 未 push。
 > 设计依据:`document/notes/2026-06-19-f4-m3-design.md` P2-1~5 + plan 修订(4 处 gap)。
 > **核对发现的 gap**:① 0x8000 是 bootloader stage2 加载地址(runtime 空闲,标准 SIPI 选址);② qemu.cmake 无 -smp(P2-4 加 run-*-smp target);③ AP boot 独立于 mini loader(trampoline 自建页表/长模式);④ 全局 runq(P0#2)P2 不修(AP idle)。
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
-| P2-1 | LocalAPIC IPI:ICR(0x300/0x310)+ delivery mode 常量 + send_ipi/init/sipi(等 delivery status Idle)+ mock 单测 | ✅ | f4f5baf | 872/0(+3) |
-| P2-2 | AP trampoline `ap_trampoline.S` @0x8000(16→32→64:A20/CR0.PE/CR4.PAE/EFER.LME/CR3=BSP_PML4/CR0.PG)+ BSP 拷贝到低内存 + 注入 AP 参数;参考 `boot/common/long_mode.S` | 🔄 NEXT | — | — |
-| P2-3 | `ap_main.cpp` C 入口:wrmsr(KERNEL_GS_BASE=&percpu_blocks[cpu]) + 加载 gdt_blocks[cpu] + IDT + AP 栈 + LAPIC enable + 填 cpu_id/apic_id + 就绪屏障 + idle hlt;CPUManager | ⏳ | — | — |
-| P2-4 | qemu.cmake 加 run-kernel-test-smp/run-smp(`-smp 2`);BSP INIT-SIPI-SIPI 序列(send_init→10ms→send_sipi 0x08→send_sipi→等屏障);双核 online 验证 | ⏳ | — | — |
-| P2-5 | 收尾:-smp 1 回归 + -smp 2 双核 + 真机 + ROADMAP/PLAN(F4-M3 ✅)+ 笔记 | ⏳ | — | — |
+| P2-1 | LocalAPIC IPI:ICR(0x300/0x310)+ delivery mode 常量 + send_ipi/init/sipi(等 delivery status Idle)+ mock 单测 | ✅ | f4f5baf(PR#22) | 872/0(+3) |
+| P2-4a | qemu.cmake 加 run-smp/run-kernel-test-smp(`-smp 2`) | ✅ | b8d9cb7 | run-kernel-test-smp 872/0 |
+| P2-2/3/4b | trampoline `ap_trampoline.S` @0x8000(16→32→64,内联表达式寻址)+ ap_entry_long(切 CR3)+ ap_main(GS/GDT/IDT/LAPIC+屏障+cli;hlt)+ boot_aps(临时页表+拷贝注入+INIT-SIPI-SIPI+等就绪) | ✅ | 1194345 | **真机 -smp 2 AP1 online + GUI 稳定** |
+| P2-5 | 收尾:-smp 1/2 回归 + 全量 + test_host + ROADMAP/PLAN(F4-M3 ✅)+ 笔记 | ✅ | (本次) | 872/0 + test_host + -smp 1/2 真机 |
 
-> **风险**:P2-2 trampoline 是 F4 最高风险(real→long 模式切换经典坑密集,可能迭代);-smp 2 + KVM 可能怪异(参考 GOTCHA#14,用 CINUX_NO_KVM=1 TCG 对照)。AP 先 idle 不暴露 lost-wakeup(留 M4/Phase3)。
+> **P2-2 关键 GOTCHA(执行时踩/避)**:① **GAS 宏不内联展开**(`$TP()` 永远失败,`.altmacro` 也不行;本构建 GAS-direct `#`=注释非 cpp)→ 改**内联表达式 `(label-ap_trampoline_start+0x8000)`**(GAS 两遍解析同 section 符号差=常量)。② **CR3 切换不能在 0x8000**(切后内核 PML4 不映 0x8000)→ 在 higher-half `ap_entry_long`(两边都映)里切 + 设栈。③ AP `cli;hlt`(非 sti;hlt):`Scheduler::current_` 仍静态,AP 上跑中断 handler 有并发风险 → IF=0 永久 halt 归零(P2);M4 改可唤醒 + per-CPU 化。④ 双 SIPI 致 trampoline 跑两次(SIPI#1 后 AP init 慢,守卫发 SIPI#2 兜底,spec 行为,无害)。详见 `document/notes/2026-06-19-f4-m3-p2-ap-boot.md`。
+> **边界**:AP idle 不跑用户任务(M4 多核调度:per-CPU runq + `current_` per-CPU);lost-wakeup 未修(Phase 3)。**F4-M3 全里程碑(Phase 1+2)收官。**
 
 ## ✅ F-INFRA（基建加固）完成 — 2026-06-19
 
