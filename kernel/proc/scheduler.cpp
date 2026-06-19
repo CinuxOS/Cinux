@@ -51,20 +51,23 @@ void RoundRobin::enqueue(Task* task) {
     task->state = TaskState::Ready;
 }
 
+void RoundRobin::remove_at_locked(int i) {
+    for (int j = i; j < count_ - 1; j++) {
+        int cur         = (head_ + j) % MAX_TASKS;
+        int nxt         = (head_ + j + 1) % MAX_TASKS;
+        run_queue_[cur] = run_queue_[nxt];
+    }
+    run_queue_[(head_ + count_ - 1) % MAX_TASKS] = nullptr;
+    tail_                                        = (tail_ - 1 + MAX_TASKS) % MAX_TASKS;
+    count_--;
+}
+
 void RoundRobin::dequeue(Task* task) {
     auto g = lock_.irq_guard();
     (void)g;
     for (int i = 0; i < count_; i++) {
-        int idx = (head_ + i) % MAX_TASKS;
-        if (run_queue_[idx] == task) {
-            for (int j = i; j < count_ - 1; j++) {
-                int cur         = (head_ + j) % MAX_TASKS;
-                int nxt         = (head_ + j + 1) % MAX_TASKS;
-                run_queue_[cur] = run_queue_[nxt];
-            }
-            run_queue_[(head_ + count_ - 1) % MAX_TASKS] = nullptr;
-            tail_                                        = (tail_ - 1 + MAX_TASKS) % MAX_TASKS;
-            count_--;
+        if (run_queue_[(head_ + i) % MAX_TASKS] == task) {
+            remove_at_locked(i);
             return;
         }
     }
@@ -76,14 +79,27 @@ Task* RoundRobin::pick_next() {
     if (count_ == 0) {
         return nullptr;
     }
-    Task* task = run_queue_[head_];
-    head_      = (head_ + 1) % MAX_TASKS;
-    count_--;
+
+    // Select the highest-priority ready task: priority is "lower value runs
+    // first" (Linux style, matching the idle task's priority of 255).  Ties are
+    // broken FIFO (earliest enqueued first) so equal-priority tasks round-robin.
+    int best = 0;
+    for (int i = 1; i < count_; i++) {
+        int idx      = (head_ + i) % MAX_TASKS;
+        int best_idx = (head_ + best) % MAX_TASKS;
+        if (run_queue_[idx]->priority < run_queue_[best_idx]->priority) {
+            best = i;
+        }
+    }
+    Task* task = run_queue_[(head_ + best) % MAX_TASKS];
+    remove_at_locked(best);
 
     task->state        = TaskState::Running;
     // A freshly scheduled task starts with a full time quantum.
     quantum_remaining_ = Scheduler::DEFAULT_TIME_SLICE;
 
+    // Re-enqueue at the tail so the task keeps cycling (round-robin within its
+    // own priority level) rather than being dropped after one run.
     run_queue_[tail_] = task;
     tail_             = (tail_ + 1) % MAX_TASKS;
     count_++;

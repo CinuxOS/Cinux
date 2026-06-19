@@ -506,6 +506,90 @@ void test_task_deadline_default_zero() {
 }  // namespace test_sched_class_hooks
 
 // ============================================================
+// Test 12: Priority-aware RoundRobin (F3-M4 batch 2)
+// ============================================================
+
+namespace test_priority {
+
+void test_priority_picks_lowest_value() {
+    RoundRobin rr;
+    Task*      hi = TaskBuilder()
+                        .set_entry(test_task_builder::dummy_entry)
+                        .set_name("hi")
+                        .set_priority(0)
+                        .build();
+    Task*      lo = TaskBuilder()
+                        .set_entry(test_task_builder::dummy_entry)
+                        .set_name("lo")
+                        .set_priority(10)
+                        .build();
+    TEST_ASSERT_NOT_NULL(hi);
+    TEST_ASSERT_NOT_NULL(lo);
+
+    rr.enqueue(hi);  // priority 0
+    rr.enqueue(lo);  // priority 10
+
+    // Lower value = higher priority: hi is always selected while ready.
+    TEST_ASSERT_EQ(rr.pick_next(), hi);
+    // hi is re-enqueued and is still the lowest value, so it is picked again
+    // (strict priority -- lo is starved while a higher-priority task is ready).
+    TEST_ASSERT_EQ(rr.pick_next(), hi);
+}
+
+void test_priority_round_robin_within_level() {
+    RoundRobin rr;
+    Task*      a = TaskBuilder()
+                       .set_entry(test_task_builder::dummy_entry)
+                       .set_name("a")
+                       .set_priority(5)
+                       .build();
+    Task*      b = TaskBuilder()
+                       .set_entry(test_task_builder::dummy_entry)
+                       .set_name("b")
+                       .set_priority(5)
+                       .build();
+    Task*      c = TaskBuilder()
+                       .set_entry(test_task_builder::dummy_entry)
+                       .set_name("c")
+                       .set_priority(9)
+                       .build();
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_NOT_NULL(c);
+
+    rr.enqueue(a);
+    rr.enqueue(b);
+    rr.enqueue(c);
+
+    // Equal-priority tasks (a, b) round-robin; c (lower priority) is starved.
+    TEST_ASSERT_EQ(rr.pick_next(), a);
+    TEST_ASSERT_EQ(rr.pick_next(), b);
+    TEST_ASSERT_EQ(rr.pick_next(), a);
+    TEST_ASSERT_EQ(rr.pick_next(), b);
+}
+
+void test_priority_ignores_enqueue_order() {
+    RoundRobin rr;
+    Task*      first  = TaskBuilder()
+                            .set_entry(test_task_builder::dummy_entry)
+                            .set_name("first")
+                            .set_priority(20)
+                            .build();
+    Task*      second = TaskBuilder()
+                            .set_entry(test_task_builder::dummy_entry)
+                            .set_name("second")
+                            .set_priority(1)
+                            .build();
+    rr.enqueue(first);   // enqueued first but lower priority
+    rr.enqueue(second);  // enqueued later but higher priority
+
+    // pick_next selects by priority, not enqueue order.
+    TEST_ASSERT_EQ(rr.pick_next(), second);
+}
+
+}  // namespace test_priority
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -535,6 +619,10 @@ extern "C" void run_scheduler_tests() {
     RUN_TEST(test_sched_class_hooks::test_task_tick_quantum);
     RUN_TEST(test_sched_class_hooks::test_task_fork_inherits_priority);
     RUN_TEST(test_sched_class_hooks::test_task_deadline_default_zero);
+
+    RUN_TEST(test_priority::test_priority_picks_lowest_value);
+    RUN_TEST(test_priority::test_priority_round_robin_within_level);
+    RUN_TEST(test_priority::test_priority_ignores_enqueue_order);
 
     TEST_SUMMARY();
 }

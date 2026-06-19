@@ -52,6 +52,10 @@ public:
     // task_deadline is inherited unchanged (0 = not deadline-based).
 
 private:
+    // Remove the slot at logical index i (0-based from head_) and compact the
+    // ring buffer around it.  Caller must hold lock_.
+    void remove_at_locked(int i);
+
     Task*    run_queue_[MAX_TASKS];
     int      head_;
     int      tail_;
