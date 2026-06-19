@@ -47,19 +47,19 @@
 **推迟 M3**：IPI（send_ipi/init/sipi）+ APIC timer（多核 AP 启动 / per-CPU timer 需要）；MSI/MSI-X → F4-M2b 或 F5-xHCI 前置。
 **F4-M1+M2 完成**（9 commit，840→869/0 + 真机）。详见 `document/notes/2026-06-19-f4-m2-*.md`。下个焦点：**M3 AP 启动**（IPI + per-CPU）或 F4 暂停 push/PR。
 
-## 🔄 F4-M3（AP 启动 + Per-CPU）— Phase 1 执行中 — 2026-06-19
+## ✅ F4-M3 Phase 1（Per-CPU 架构,单核重构）完成 — 2026-06-19
 
-> **本会话范围 = Phase 1 only(P1-1~4,单核 per-CPU 重构,落地后再议 Phase 2)。** 分支 `feat/f4-m1-acpi`(接 M2 commit `1460afa`)。Phase 2(AP 启动)待 Phase 1 落地后单独议。
+> **Phase 1(P1-1~4)完成,全程 869/0 行为不变 + 真机 GUI。** Phase 2(AP 启动)待议。分支 `feat/f4-m1-acpi`(15 commit 未 push:M1 4 + M2 4 + M3-P1 4 + docs 3)。
 > **设计文档(执行依据):[document/notes/2026-06-19-f4-m3-design.md](../notes/2026-06-19-f4-m3-design.md)** —— 调研结论、PerCpu GS 设计、9 批拆批、风险/GOTCHA。
-> 核心:PerCpu{kernel_stack@0(兼容 syscall %gs:0), current, cpu_id, apic_id} + percpu_blocks[kMaxCpus] + percpu() 读 MSR_GS_BASE;context_switch 去 per-task GS;AP trampoline @0x8000(16→64 bit)+ INIT-SIPI-SIPI。
-> 调研:SMP 就绪 ~20%,4 P0(current_ 静态/全局 runq/单 TSS/无 AP trampoline)+ 3 P1(futex/waitpid/mutex lost-wakeup,Phase 3 修)。
+> 核心:PerCpu{kernel_stack@0(兼容 syscall %gs:0), current, cpu_id, apic_id} + percpu_blocks[kMaxCpus] + percpu() 读 MSR_GS_BASE;context_switch 去 per-task GS;每 CPU GDT/TSS;AP trampoline @0x8000 + INIT-SIPI-SIPI(Phase 2)。
+> 调研:SMP 就绪 ~20%,4 P0(current_ 静态/全局 runq/单 TSS/无 AP trampoline)+ 3 P1(futex/waitpid/mutex lost-wakeup,Phase 3 修)。**Phase 1 修了 P0#1(current→percpu)+ #3(单 TSS→gdt_blocks);#2 全局 runq / #4 AP trampoline 留 Phase 2/3。**
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
 | P1-1 | PerCpu 结构(kernel_stack@0)+ percpu_blocks[] + percpu() 静态返 [0];迁移 ~15 处 g_per_cpu;gs 页双镜像;测试改 percpu()->current;删 per_cpu.hpp/g_per_cpu | ✅ | eaccc57 | 869/0 + 真机 GUI |
 | P1-2 | GS 锚定 PerCpu[0] + 完整 swapgs 纪律:usermode_init 设 GS_BASE/KERNEL_GS_BASE、删 gs 页;jump_to_usermode 加 swapgs;ISR 宏条件 swapgs(按 CS 判 CPL);context_switch.S 删 GS 存取(fs_base 保留);CpuContext gs/kgs 留 reserved、删 3 处 kgs_base=;percpu() 读 MSR_GS_BASE;补 msr.hpp;usermode_init 提前到 IDT 后 | ✅ | c1a511e | 869/0 + 真机 GUI |
-| P1-3 | per-CPU GDT/TSS:gdt_blocks[] + init/load_gdt(cpu);tss_set_rsp0 加 cpu;scheduler 4 处跟进 | 🔄 NEXT | — | — |
-| P1-4 | 收尾:全量回归 + 真机 + ROADMAP + 笔记(Phase 1 ✅) | ⏳ | — | — |
+| P1-3 | per-CPU GDT/TSS:g_gdt→gdt_blocks[kMaxCpus](不完整数组声明免耦合);tss_set_rsp0 内部读 percpu()->cpu_id(签名不变);main/main_test 用 [0] | ✅ | b9af79f | 869/0 + 真机 GUI |
+| P1-4 | 收尾:全量 cmake --build + test_host + 真机 + ROADMAP/PLAN + Phase 1 收尾笔记 | ✅ | (本次) | 869/0 + test_host 全绿 + 真机 GUI |
 
 > **P1-2 关键发现:原设计低估 swapgs 牵连**——ISR(interrupts.S)无 swapgs(仅 syscall.S 有),中断从用户态进入 GS_BASE=0 而 `schedule()→percpu()` 在中断上下文 → percpu() 读 MSR 会崩。改走**完整 swapgs 纪律**(Option A):ISR 宏按帧内 CS 判 CPL=3 条件 swapgs(entry RSP+144 / exit RSP+136,%rax scratch)。**usermode_init 提前到 IDT 后**(原在 sync 测试之后,P1-2 后会崩)。已知局限:NMI/#DB 在 syscall-exit swapgs 窗口(Linux paranoid 路径留 follow-up)。详见 `document/notes/2026-06-19-f4-m3-p1-2-swapgs-discipline.md`。
 > P1-1 GOTCHA:gs 页双镜像(P1-1 过渡,GS 未动 → syscall 仍读 gs 页 → update_syscall_stack 双写 percpu+gs 页;P1-2 才并入);测试 `percpu()->current = t` 忠实迁移(非 set_current)。详见 `document/notes/2026-06-19-f4-m3-p1-1-percpu-block.md`。
