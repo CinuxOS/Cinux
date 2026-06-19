@@ -209,6 +209,21 @@ void Scheduler::register_class(SchedulingClass* sched_class) {
     classes_[class_count_++] = sched_class;
 }
 
+Task* Scheduler::pick_next_from(SchedulingClass** classes, int count) {
+    // Precedence is array order: the first class with a runnable task wins,
+    // later classes are only consulted once every earlier class is empty.
+    for (int i = 0; i < count; i++) {
+        if (Task* next = classes[i]->pick_next()) {
+            return next;
+        }
+    }
+    return nullptr;
+}
+
+Task* Scheduler::pick_next_task() {
+    return pick_next_from(classes_, class_count_);
+}
+
 void Scheduler::add_task(Task* task) {
     if (task->sched_class == nullptr) {
         task->sched_class = &default_rr_;
@@ -248,7 +263,7 @@ void Scheduler::exit_current() {
         cinux::lib::kprintf("[SCHED] Task tid=%u '%s' exited\n", prev->tid, prev->name);
     }
 
-    Task* next = default_rr_.pick_next();
+    Task* next = pick_next_task();
     if (next == nullptr) {
         if (idle_task_ != nullptr) {
             next = idle_task_;
@@ -276,7 +291,7 @@ void Scheduler::run_first(Task* boot_task) {
     g_per_cpu.current = boot_task;
     cinux::arch::GDT::tss_set_rsp0(boot_task->kernel_stack_top);
 
-    Task* next = default_rr_.pick_next();
+    Task* next = pick_next_task();
     if (next == nullptr) {
         return;
     }
@@ -329,7 +344,7 @@ void Scheduler::schedule() {
         prev->state = TaskState::Ready;
     }
 
-    Task* next = default_rr_.pick_next();
+    Task* next = pick_next_task();
 
     if (next == nullptr || next == prev) {
         // F3-M3 batch 4a: a Zombie task (exited, awaiting reap) must never be

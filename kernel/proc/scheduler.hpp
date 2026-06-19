@@ -85,8 +85,15 @@ public:
     static void block(Task* task, const char* reason);
     static void unblock(Task* task);
 
+    // Ask each class in `classes` (precedence = array order, index 0 first) for
+    // its next runnable task; return the first non-null, or nullptr if every
+    // class is empty.  Exposed as a primitive so the multi-class traversal is
+    // unit-testable in isolation, independent of the global class table.
+    static Task* pick_next_from(SchedulingClass** classes, int count);
+
 private:
-    static void idle_entry();
+    static void  idle_entry();
+    static Task* pick_next_task();  // pick_next_from(classes_, class_count_)
 
     static SchedulingClass* classes_[MAX_CLASSES];
     static int              class_count_;

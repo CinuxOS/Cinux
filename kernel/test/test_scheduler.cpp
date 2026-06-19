@@ -590,6 +590,72 @@ void test_priority_ignores_enqueue_order() {
 }  // namespace test_priority
 
 // ============================================================
+// Test 13: Multi-class consultation (F3-M4 batch 3)
+// ============================================================
+
+namespace test_multi_class {
+
+// A class that is always empty.
+class EmptyClass : public SchedulingClass {
+public:
+    void        enqueue(Task*) override {}
+    void        dequeue(Task*) override {}
+    Task*       pick_next() override { return nullptr; }
+    const char* name() const override { return "EmptyClass"; }
+};
+
+// A class that holds a single task and drains it on pick_next.
+class OneShotClass : public SchedulingClass {
+public:
+    void  enqueue(Task* t) override { task_ = t; }
+    void  dequeue(Task*) override { task_ = nullptr; }
+    Task* pick_next() override {
+        Task* t = task_;
+        task_   = nullptr;
+        return t;
+    }
+    const char* name() const override { return "OneShotClass"; }
+
+private:
+    Task* task_ = nullptr;
+};
+
+void test_pick_next_from_skips_empty() {
+    EmptyClass   a;
+    OneShotClass b;
+    EmptyClass   c;
+    Task* mine = TaskBuilder().set_entry(test_task_builder::dummy_entry).set_name("mc").build();
+    b.enqueue(mine);
+
+    SchedulingClass* classes[3] = {&a, &b, &c};
+    // a empty -> skip; b returns mine -> selected; c never asked.
+    TEST_ASSERT_EQ(Scheduler::pick_next_from(classes, 3), mine);
+}
+
+void test_pick_next_from_all_empty() {
+    EmptyClass       a;
+    EmptyClass       b;
+    SchedulingClass* classes[2] = {&a, &b};
+    TEST_ASSERT_NULL(Scheduler::pick_next_from(classes, 2));
+}
+
+void test_pick_next_from_first_class_wins() {
+    OneShotClass a;
+    OneShotClass b;
+    Task* first = TaskBuilder().set_entry(test_task_builder::dummy_entry).set_name("first").build();
+    Task* second =
+        TaskBuilder().set_entry(test_task_builder::dummy_entry).set_name("second").build();
+    a.enqueue(first);
+    b.enqueue(second);
+
+    SchedulingClass* classes[2] = {&a, &b};
+    // a (index 0) wins; b is never consulted.
+    TEST_ASSERT_EQ(Scheduler::pick_next_from(classes, 2), first);
+}
+
+}  // namespace test_multi_class
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -623,6 +689,10 @@ extern "C" void run_scheduler_tests() {
     RUN_TEST(test_priority::test_priority_picks_lowest_value);
     RUN_TEST(test_priority::test_priority_round_robin_within_level);
     RUN_TEST(test_priority::test_priority_ignores_enqueue_order);
+
+    RUN_TEST(test_multi_class::test_pick_next_from_skips_empty);
+    RUN_TEST(test_multi_class::test_pick_next_from_all_empty);
+    RUN_TEST(test_multi_class::test_pick_next_from_first_class_wins);
 
     TEST_SUMMARY();
 }
