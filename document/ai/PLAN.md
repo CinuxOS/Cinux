@@ -64,21 +64,38 @@
 > **P1-2 关键发现:原设计低估 swapgs 牵连**——ISR(interrupts.S)无 swapgs(仅 syscall.S 有),中断从用户态进入 GS_BASE=0 而 `schedule()→percpu()` 在中断上下文 → percpu() 读 MSR 会崩。改走**完整 swapgs 纪律**(Option A):ISR 宏按帧内 CS 判 CPL=3 条件 swapgs(entry RSP+144 / exit RSP+136,%rax scratch)。**usermode_init 提前到 IDT 后**(原在 sync 测试之后,P1-2 后会崩)。已知局限:NMI/#DB 在 syscall-exit swapgs 窗口(Linux paranoid 路径留 follow-up)。详见 `document/notes/2026-06-19-f4-m3-p1-2-swapgs-discipline.md`。
 > P1-1 GOTCHA:gs 页双镜像(P1-1 过渡,GS 未动 → syscall 仍读 gs 页 → update_syscall_stack 双写 percpu+gs 页;P1-2 才并入);测试 `percpu()->current = t` 忠实迁移(非 set_current)。详见 `document/notes/2026-06-19-f4-m3-p1-1-percpu-block.md`。
 
-## 🔄 F4-M3 Phase 2(AP 启动 / SMP 双核)— 执行中 — 2026-06-19
+## ✅ F4-M3 Phase 2(AP 启动 / SMP 双核)完成 — 2026-06-19
 
-> **目标:`-smp 2` 双核 AP online + idle(AP 不跑用户任务,留 M4)。** F4 最难里程碑(trampoline 单点最高风险)。分支 `feat/f4-m3-ap-boot`(从 main)。
+> **`-smp 2` 双核 AP online + idle 达成。** F4 最难里程碑(trampoline 首次实跑即通)。分支 `feat/f4-m3-trampoline`(从 main 拉,P2-1 已合 main PR#22)。3 commit 未 push。
 > 设计依据:`document/notes/2026-06-19-f4-m3-design.md` P2-1~5 + plan 修订(4 处 gap)。
 > **核对发现的 gap**:① 0x8000 是 bootloader stage2 加载地址(runtime 空闲,标准 SIPI 选址);② qemu.cmake 无 -smp(P2-4 加 run-*-smp target);③ AP boot 独立于 mini loader(trampoline 自建页表/长模式);④ 全局 runq(P0#2)P2 不修(AP idle)。
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
-| P2-1 | LocalAPIC IPI:ICR(0x300/0x310)+ delivery mode 常量 + send_ipi/init/sipi(等 delivery status Idle)+ mock 单测 | ✅ | f4f5baf | 872/0(+3) |
-| P2-2 | AP trampoline `ap_trampoline.S` @0x8000(16→32→64:A20/CR0.PE/CR4.PAE/EFER.LME/CR3=BSP_PML4/CR0.PG)+ BSP 拷贝到低内存 + 注入 AP 参数;参考 `boot/common/long_mode.S` | 🔄 NEXT | — | — |
-| P2-3 | `ap_main.cpp` C 入口:wrmsr(KERNEL_GS_BASE=&percpu_blocks[cpu]) + 加载 gdt_blocks[cpu] + IDT + AP 栈 + LAPIC enable + 填 cpu_id/apic_id + 就绪屏障 + idle hlt;CPUManager | ⏳ | — | — |
-| P2-4 | qemu.cmake 加 run-kernel-test-smp/run-smp(`-smp 2`);BSP INIT-SIPI-SIPI 序列(send_init→10ms→send_sipi 0x08→send_sipi→等屏障);双核 online 验证 | ⏳ | — | — |
-| P2-5 | 收尾:-smp 1 回归 + -smp 2 双核 + 真机 + ROADMAP/PLAN(F4-M3 ✅)+ 笔记 | ⏳ | — | — |
+| P2-1 | LocalAPIC IPI:ICR(0x300/0x310)+ delivery mode 常量 + send_ipi/init/sipi(等 delivery status Idle)+ mock 单测 | ✅ | f4f5baf(PR#22) | 872/0(+3) |
+| P2-4a | qemu.cmake 加 run-smp/run-kernel-test-smp(`-smp 2`) | ✅ | b8d9cb7 | run-kernel-test-smp 872/0 |
+| P2-2/3/4b | trampoline `ap_trampoline.S` @0x8000(16→32→64,内联表达式寻址)+ ap_entry_long(切 CR3)+ ap_main(GS/GDT/IDT/LAPIC+屏障+cli;hlt)+ boot_aps(临时页表+拷贝注入+INIT-SIPI-SIPI+等就绪) | ✅ | 1194345 | **真机 -smp 2 AP1 online + GUI 稳定** |
+| P2-5 | 收尾:-smp 1/2 回归 + 全量 + test_host + ROADMAP/PLAN(F4-M3 ✅)+ 笔记 | ✅ | (本次) | 872/0 + test_host + -smp 1/2 真机 |
 
-> **风险**:P2-2 trampoline 是 F4 最高风险(real→long 模式切换经典坑密集,可能迭代);-smp 2 + KVM 可能怪异(参考 GOTCHA#14,用 CINUX_NO_KVM=1 TCG 对照)。AP 先 idle 不暴露 lost-wakeup(留 M4/Phase3)。
+> **P2-2 关键 GOTCHA(执行时踩/避)**:① **GAS 宏不内联展开**(`$TP()` 永远失败,`.altmacro` 也不行;本构建 GAS-direct `#`=注释非 cpp)→ 改**内联表达式 `(label-ap_trampoline_start+0x8000)`**(GAS 两遍解析同 section 符号差=常量)。② **CR3 切换不能在 0x8000**(切后内核 PML4 不映 0x8000)→ 在 higher-half `ap_entry_long`(两边都映)里切 + 设栈。③ AP `cli;hlt`(非 sti;hlt):`Scheduler::current_` 仍静态,AP 上跑中断 handler 有并发风险 → IF=0 永久 halt 归零(P2);M4 改可唤醒 + per-CPU 化。④ 双 SIPI 致 trampoline 跑两次(SIPI#1 后 AP init 慢,守卫发 SIPI#2 兜底,spec 行为,无害)。详见 `document/notes/2026-06-19-f4-m3-p2-ap-boot.md`。
+> **边界**:AP idle 不跑用户任务(M4 多核调度:per-CPU runq + `current_` per-CPU);lost-wakeup 未修(Phase 3)。**F4-M3 全里程碑(Phase 1+2)收官。**
+
+## 🔄 F4-M4（多核调度）— 批 0+1+3 + M4-2-1/2-2(限定) 完成,M4-2-3(迁移) 待做 — 2026-06-20
+
+> M4 让 AP 从 idle 变成能跑用户任务。顺序 A(用户决策:先 M4-3 后 M4-2 + 不做 timer 抢占)。已完成 M4-0/M4-1(批0+1)+ **M4-3(prepare-to-wait,批3,`b33264b`,875/0)** + **M4-2-1(reschedule IPI 通路,`e8f0136`)** + **M4-2-2(per-CPU idle + runqueue 多核安全 + AP1 sti;hlt 基础设施,`3d080a0`,限定交付)**,剩 **M4-2-3**(user task 多核迁移——修迁移 GP GOTCHA#25)。分支 `feat/f4-m3-trampoline`。详见 notes:`2026-06-20-f4-m4-0-1-test-refactor-percpu.md`、`2026-06-20-f4-m4-3-prepare-to-wait.md`、`2026-06-20-f4-m4-2-1-reschedule-ipi.md`、`2026-06-20-f4-m4-2-2-ap-idle-loop.md`。
+> **上一轮试做 M4-1 回退教训**:phantom-task 测试(test_sync/futex/clone)靠 `current_`(静态)与 `percpu()->current` 的**未文档化分歧**让 block() 不 schedule;M4-1 改读 percpu 后必 hang。**真正 hack 是这条分歧,不是 role-play 本身。**
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| M4-0 | phantom 测试显式化:`NoRescheduleGuard`(gate block() schedule,生产 depth=0 无影响)+ `percpu()->current=X`→`set_current(X)`(GOTCHA#21)+ `RoundRobin::clear()`/`init()` 清 runq(test 隔离)+ `test_block_dispatches_to_runnable`(真 dispatch 路径覆盖) | ✅ | ac92bef | 873/0(+1) |
+| M4-1 | `current_` 静态全局→per-CPU:删成员,`current()`读`percpu()->current`,set_current/schedule/exit_current/run_first/tick/yield/block 全走 percpu,删双写;~35 调用点经 accessor 零改 | ✅ | 7dba770 | 873/0 + smp 873/0 + host 48/0 + run-smp AP1 online/GUI |
+| M4-2-1 | reschedule IPI 基础设施:vector 0xE0 + stub + handler(纯 `g_lapic.eoi()`)+ irq_init 注册 + `wake_idle_ap()`(多发 IPI 给在线 AP,免精确 idle 跟踪)+ `add_task`/`unblock` 唤醒点。单核 no-op(无在线 AP) | ✅ | e8f0136 | 875/0(单核 no-op,TCG) |
+| M4-2-2 | per-CPU idle(`idle_tasks_[kMaxCpus]`+`idle()`/`setup_ap_idle`)+ runqueue 多核安全(`pick_next` 删 re-enqueue + `schedule` enqueue prev,4 RoundRobin 单测适配)+ AP1 `sti;hlt` 基础设施(ap_main 启动 idle 序列 + `ap_idle_entry` sti;hlt)。**限定交付:user task 迁移 GP(GOTCHA#25)留 M4-2-3** | ✅ | 3d080a0 | 875/0 + -smp 2 干净(AP1 online+GUI,无 GP) |
+| M4-2-3 | **user task 多核迁移**:修迁移 GP(GOTCHA#25,%gs 损坏,swapgs 全链代码正确根因需 GDB -smp 2 抓第一次 faulting RIP)+ 启用 `ap_idle_entry` schedule loop(pick 共享 runq)+ 可能 per-CPU runqueue(避免迁移竞态)。AP 真跑 user task 收官 | ⏳ | — | — |
+| M4-3 | lost-wakeup prepare-to-wait:`prepare_to_wait`(irq_guard 下原子设 Blocked)+ `schedule_blocked`(NoRescheduleGuard 感知)+ unblock 幂等(仅 Blocked 才入队);Mutex/Sem/futex/waitpid 四处改用 prepare+schedule_blocked,block() 保留原样(测试/管理) | ✅ | b33264b | 875/0(+2 精确交错单测) |
+
+> **关键 GOTCHA(M4-1)**:`fxrstor current()->fpu_state` 在任务恢复点必须读 percpu(= 切到本任务那次 schedule 设的值),**绝不能用局部 `next->fpu_state`** —— context_switch 返回时跑在 next 上下文,但执行的是 prev 当初被切出时那条 fxrstor(prev 栈帧里 next 已过期),旧全局 `current_` 读对,M4-1 须用 `current()` 等价。详见 GOTCHA#23。
+> **不变量**:单核全程不变(percpu[0] 等价旧 current_);AP1 现 sti;hlt idle(IF=1 接 reschedule IPI,M4-2-2),但**不迁移 user task**(迁移 GP GOTCHA#25,M4-2-3)。**per-CPU idle + runqueue 多核安全(pick 移除)完成。**
 
 ## ✅ F-INFRA（基建加固）完成 — 2026-06-19
 
@@ -277,6 +294,9 @@ dmesg 全链路闭环：`kprintf`/`klog_*` → KernelLog ring（IRQ 安全）→
 20. **fork/clone 栈拷贝 full_used 须 < 栈大小，否则下溢踩邻接（F3-M2 批4 教训，2026-06-18）**：`full_used = parent->kernel_stack_top - current_rsp`，子栈 `stack_size`=16KB。若 `full_used > stack_size`（测试用 `kernel_stack_top=rsp+16384` 即触发），`child_stack_start = child_stack_virt + stack_size - full_used` 下溢到栈映射前 → memcpy 踩邻接内存（latent，堆布局变即命中要害）。fork/clone 加 `if (full_stack_used > stack_size) full_stack_used = stack_size;` 上限防御（生产永不触发，栈远未满）。测试 `kernel_stack_top` 用小偏移（rsp+4096）让 full_used < 栈大小。
 21. **单测设 current 用 Scheduler::set_current，勿直接 g_per_cpu.current（F3-M3 批3 教训，2026-06-19）**：`Scheduler::current()`（scheduler.cpp:234）返静态 `current_`，**不是** PerCpu 的 `g_per_cpu.current`。两者只由 `Scheduler::set_current(task)`（scheduler.cpp:238）同步设置（current_ + g_per_cpu.current 都设）。单测装栈 task 作 current **必须用 `Scheduler::set_current(&t)`**，cleanup 用 `Scheduler::set_current(nullptr)`——只设 `g_per_cpu.current` 会让 `current_` 仍 nullptr，任何经 `Scheduler::current()` 的 handler（sys_setpgid/setsid/未来 waitpid 阻塞等）拿到 nullptr → ESRCH，测试 fail（F3-M3 批3 首验 825/2 fail 定位此）。test_clone 的 futex 侥幸（futex 内部不经 Scheduler::current()），掩盖了这层。**通用铁律**：单测设 current 一律用 Scheduler::set_current（两者都设），勿直接写 g_per_cpu.current。
 22. **TaskBuilder().build() 消耗全局 tid 计数器,跨测试文件污染（F3-M4 批4 教训，2026-06-19）**：`next_tid` 是全局单例,`TaskBuilder().build()` 每次分配递增。测试文件**共享**一个计数器,执行序固定（`run_signal_tests()` 在 `run_scheduler_tests()` 前）。新测试用 TaskBuilder 建 victim 分到 tid 1/2/3 → 后跑的 `test_build_basic_task` 断言首任务 `tid==1`（test_scheduler.cpp:62）失败（实际 4+）。**根因非逻辑**,是共享全局态 + 脆弱断言。**修**：纯状态机测试（只碰 state/sched_class/sig_actions/sig_pending）用**栈 `Task t{}`**（同 test_sig_state 范式）,零 tid/slab/核栈消耗 → 不污染计数器。**通用铁律**：跨测试文件共享全局计数器（tid/pid/next_*）,新测试用 TaskBuilder 建任务会位移他测的「首任务 tid==N」断言;能不分配就不分配（栈 Task 优先）。
+23. **context_switch 恢复点的 current 必须读 per-CPU,不能用局部 next(F4-M4 M4-1 教训,2026-06-20)**：`schedule()`/`exit_current()` 里 `context_switch(&prev->ctx,&next->ctx)` **返回时跑在 next 的上下文,但执行的是 prev 当初被切出时**那条 `fxrstor`(prev 的栈帧)。该栈帧里的局部 `next` 还是 prev 当年的 next(已过期),**不能用 `next->fpu_state`**(会恢复错任务的 FPU)。旧代码用全局静态 `current_`(被「切到本任务那次」schedule 设成本任务)读对;current_→percpu 改造后须用 `current()`(读 `percpu()->current`,语义等价旧全局)。**通用铁律**：context_switch 返回后任何对「现在跑谁」的引用,读 per-CPU current(`current()`/`percpu()->current`),勿用 switch 时的局部 next/prev(跨切出-切入已过期)。同批另一教训:`Scheduler::init()` 须清 runq(`RoundRobin::clear()`)——测试间 stale task 会泄漏到下一个测试,首个真跑 `block(current)→schedule→pick_next` 的测试会选中 stale task 去真跑它本不该跑的 entry → 崩;boot 时 runq 空 no-op,生产无影响。
+24. **prepare-to-wait 的 schedule_blocked() 必须在等待锁 irq_guard 析构后调用（F4-M4 M4-3 教训,2026-06-20）**:prepare_to_wait 提前设 state=Blocked,若 schedule 在持锁时跑(irq_guard 还活着)→持锁切走→lockdep panic 或死锁(切走的任务无法释放锁)。用嵌套 `{}` 块限定 guard 作用域:`{ auto g=spin_.irq_guard(); enqueue_waiter; prepare_to_wait(self); }` 先析构(release+sti),**再** `schedule_blocked()`。**通用铁律**:任何「先标记将睡、后 schedule」的 prepare-to-wait 模式,标记须持锁(irq_guard 关中断防本核 tick 抢跑),schedule 必须释锁后;否则持锁切走。配合 unblock 幂等(仅 state==Blocked 才入队,防 double-enqueue)关闭 lost-wakeup 窗口。详见 `document/notes/2026-06-20-f4-m4-3-prepare-to-wait.md`。
+25. **user task 迁移到 AP 确定性 GP(F4-M4 M4-2-2 教训,2026-06-20)**:AP1 完整 schedule(pick user task init/kernel_init 迁移)→ 确定性 #GP(%gs 损坏,GS_BASE 非规范 0xF000FF53F000FF53,之后任何 percpu() %gs: 访问再 GP),GUI 不启动(run 1/2 每次 GP=71)。AP1 不迁移(sti;hlt)→ 干净(GUI+用户程序+AP1 online)。**swapgs 全链代码审查正确**(ISR 条件 swapgs interrupts.S:72 / syscall.S / jump_to_usermode usermode.S:109),根因指令被 panic backtrace 递归 GP(in_kernel_stack→current()→%gs→GP→panic→...)+ 代码布局敏感(禁 backtrace 改 binary 布局侥幸避开 race)双重掩盖,**需 GDB -smp 2 抓第一次 faulting RIP**(M4-2-3)。**通用铁律**:① 多核任务迁移需完整 user-mode 上下文(swapgs/KERNEL_GS_BASE/TSS IST/percpu),ctx/fpu/段跨 CPU 搬运是深层工作;② 迁移竞态对代码布局敏感,诊断时"禁某段代码后变干净"可能是布局侥幸避开 race,非真修;③ panic backtrace 在 %gs 损坏时递归 GP 掩盖原始 RIP,抓根因须临时禁 backtrace dump 或 GDB。M4-2-2 限定 AP1 sti;hlt 不迁移回避,迁移根治(per-CPU runqueue 或迁移同步)留 M4-2-3。详见 `document/notes/2026-06-20-f4-m4-2-2-ap-idle-loop.md`。
 
 ## ✅ direct-map 独立窗口（F2-M7 前置）Bug1 已修 — 2026-06-17（fresh build 734/0）
 
