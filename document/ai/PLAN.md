@@ -103,9 +103,9 @@
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
-| M5-1 (R3) | **原子引用计数**:SharedCwd + SharedSigActions acquire/release → `__atomic_add/sub_fetch`(ACQ_REL,去 racy `>0` 守卫)。**FDTable 核对已 `lock_.guard()` 保护,跳过**(范围修订)。F4-M4 实多核后真并发的 use-after-free/leak 根治 | ✅ | (本批) | 875/0 + 全量 host + -smp 2 冒烟干净 |
-| M5-2 (waitpid) | waitpid children 链表 lock-free → per-parent Spinlock + 锁内 double-check(M4-3 prepare-to-wait 只缩小窗口,本批根治) | ⏳ | — | — |
-| M5-3 (R6-Part2) | lockdep 锁序图:per-CPU 持锁栈 + 锁序邻接图 + DFS 检 AB-BA(opt-in `CINUX_LOCKDEP`,默认 OFF)。调试基建,可延后 | ⏳ | — | — |
+| M5-1 (R3) | **原子引用计数**:SharedCwd + SharedSigActions acquire/release → `__atomic_add/sub_fetch`(ACQ_REL,去 racy `>0` 守卫)。**FDTable 核对已 `lock_.guard()` 保护,跳过**(范围修订)。F4-M4 实多核后真并发的 use-after-free/leak 根治 | ✅ | 86f8071 | 875/0 + 全量 host + -smp 2 冒烟干净 |
+| M5-2 (waitpid) | ~~waitpid children 链表加锁~~ **经分析不必要**:`Task::children` 每 Task 私有(CLONE_THREAD 是 sibling 不入 children,fork/clone 加到 `current()->children`,waitpid 扫 `current()->children`,exit 不碰 parent->children,无 reparent)→ 每链表只被拥有任务碰(单 CPU 时刻),无跨核链表访问;唯一跨核 datum 是 child->state(Zombie)x86 原子 + exit unblock 重扫覆盖。process_new.cpp 注释已订正 | ✅(无需) | 86f8071 | — |
+| M5-3 (R6-Part2) | lockdep 锁序图:per-CPU 持锁栈 + 锁序邻接图 + DFS 检 AB-BA(opt-in `CINUX_LOCKDEP`,默认 OFF)。调试基建(非正确性 bug),可延后 | ⏳ | — | — |
 
 
 ## ✅ F-INFRA（基建加固）完成 — 2026-06-19
