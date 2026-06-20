@@ -211,4 +211,36 @@ void boot_aps() {
     lib::kprintf("[SMP] %u AP(s) online\n", booted);
 }
 
+// ============================================================
+// Reschedule IPI (F4-M4 M4-2): wake an idle AP so it re-checks the shared
+// run queue.  Once M4-2-2 switches the AP idle loop to sti;hlt, an IPI here
+// pulls the AP out of hlt and its loop runs schedule() again.
+// ============================================================
+
+// The handler is a LAPIC EOI no-op.  The actual reschedule happens in the AP's
+// idle loop after this stub returns control to the hlt instruction.  IPIs are
+// LAPIC vectors, so EOI goes straight to the local APIC -- not through the
+// IRQ-line-keyed irq_eoi() dispatch.
+extern "C" void reschedule_ipi_handler(InterruptFrame* /*frame*/) {
+    drivers::apic::g_lapic.eoi();
+}
+
+void wake_idle_ap() {
+    // Best-effort wake: IPI every AP that has signalled online.  A redundant
+    // IPI to an AP that is already busy is harmless -- its idle loop re-checks
+    // the run queue and halts again if empty.  This trades a few spurious
+    // wakeups for not needing a precisely-tracked per-CPU idle flag (whose
+    // reader-on-BSP / writer-on-AP race would need its own care).  Single-core
+    // systems have g_aps_online == 0, so the loop never runs -> no-op.
+    uint32_t online = __atomic_load_n(&g_aps_online, __ATOMIC_SEQ_CST);
+    for (uint32_t cpu = 1; cpu <= online && cpu < proc::kMaxCpus; cpu++) {
+        // percpu_blocks[cpu].apic_id was stored by that AP *before* it incremented
+        // g_aps_online (acquire/release via SEQ_CST), so it is visible once we
+        // observe online >= cpu.  id() returns a plain APIC id; send_ipi shifts
+        // it into ICR[bits 24-31], matching.
+        uint8_t apic_id = static_cast<uint8_t>(proc::percpu_blocks[cpu].apic_id);
+        drivers::apic::g_lapic.send_ipi(apic_id, kRescheduleIpiVector);
+    }
+}
+
 }  // namespace cinux::arch

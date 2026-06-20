@@ -2,6 +2,7 @@
 
 #include "kernel/arch/x86_64/gdt.hpp"
 #include "kernel/arch/x86_64/paging.hpp"
+#include "kernel/arch/x86_64/smp.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/address_space.hpp"
 #include "kernel/proc/percpu.hpp"
@@ -251,6 +252,9 @@ void Scheduler::add_task(lib::NotNull<Task*> task) {
     signal_register_task(task);
     cinux::lib::kprintf("[SCHED] Task tid=%lu '%s' added to %s\n", task->tid, task->name,
                         task->sched_class->name());
+    // A newly runnable task may be claimable by an idle AP (F4-M4 M4-2).  No-op
+    // on a single-core system.
+    arch::wake_idle_ap();
 }
 
 void Scheduler::remove_task(lib::NotNull<Task*> task) {
@@ -454,6 +458,9 @@ void Scheduler::unblock(lib::NotNull<Task*> task) {
     task->sched_class->enqueue(task);
 
     cinux::lib::kprintf("[SCHED] Task tid=%lu '%s' unblocked\n", task->tid, task->name);
+    // Wake an idle AP so it can pick up this freshly runnable task (F4-M4 M4-2).
+    // No-op on a single-core system.
+    arch::wake_idle_ap();
 }
 
 void Scheduler::prepare_to_wait(lib::NotNull<Task*> task) {
