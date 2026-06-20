@@ -97,15 +97,15 @@
 > **关键 GOTCHA(M4-1)**:`fxrstor current()->fpu_state` 在任务恢复点必须读 percpu(= 切到本任务那次 schedule 设的值),**绝不能用局部 `next->fpu_state`** —— context_switch 返回时跑在 next 上下文,但执行的是 prev 当初被切出时那条 fxrstor(prev 栈帧里 next 已过期),旧全局 `current_` 读对,M4-1 须用 `current()` 等价。详见 GOTCHA#23。
 > **不变量**:单核全程不变(percpu[0] 等价旧 current_);AP1 现真跑 user task(M4-2-3 迁移 GP 已根治:GDT::load 移除 %fs/%gs 重载)。**F4-M4 收官:per-CPU idle + runqueue 多核安全(pick 移除)+ reschedule IPI + lost-wakeup prepare-to-wait + 真 user-task 迁移。**
 
-## 🔄 F4-M5（同步原语）— Batch 1 R3 完成,Batch 2/3 待做 — 2026-06-20
+## ✅ F4-M5（同步原语）收官 — R3 + Batch2 分析 + R6-Part2 全完成 — 2026-06-20
 
-> F4-M4 让 AP 真跑线程后,把 F3-M2「共享 refcount 指针化」对象 + waitpid children 链表做成真 SMP 安全,补 lockdep 锁序图。F-INFRA 划归(R3 原子引用计数 / R6-Part2 锁序图)+ M4 follow-up(waitpid SMP)。分支 `feat/f4-m4-2-3-migration`(叠 M4-2-3,前置未 push)。计划 `.claude/plans/temporal-jumping-hartmanis.md`。
+> F4-M4 让 AP 真跑线程后,把 F3-M2「共享 refcount 指针化」对象做成真 SMP 安全,补 lockdep 锁序图。F-INFRA 划归(R3 原子引用计数 / R6-Part2 锁序图)+ M4 follow-up(waitpid SMP,经分析无需)。分支 `feat/f4-m4-2-3-migration`(叠 M4-2-3,前置未 push)。**F4 SMP 全域 M1-M5 收官**。计划 `.claude/plans/temporal-jumping-hartmanis.md`。
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
 | M5-1 (R3) | **原子引用计数**:SharedCwd + SharedSigActions acquire/release → `__atomic_add/sub_fetch`(ACQ_REL,去 racy `>0` 守卫)。**FDTable 核对已 `lock_.guard()` 保护,跳过**(范围修订)。F4-M4 实多核后真并发的 use-after-free/leak 根治 | ✅ | 86f8071 | 875/0 + 全量 host + -smp 2 冒烟干净 |
-| M5-2 (waitpid) | ~~waitpid children 链表加锁~~ **经分析不必要**:`Task::children` 每 Task 私有(CLONE_THREAD 是 sibling 不入 children,fork/clone 加到 `current()->children`,waitpid 扫 `current()->children`,exit 不碰 parent->children,无 reparent)→ 每链表只被拥有任务碰(单 CPU 时刻),无跨核链表访问;唯一跨核 datum 是 child->state(Zombie)x86 原子 + exit unblock 重扫覆盖。process_new.cpp 注释已订正 | ✅(无需) | 86f8071 | — |
-| M5-3 (R6-Part2) | lockdep 锁序图:per-CPU 持锁栈 + 锁序邻接图 + DFS 检 AB-BA(opt-in `CINUX_LOCKDEP`,默认 OFF)。调试基建(非正确性 bug),可延后 | ⏳ | — | — |
+| M5-2 (waitpid) | ~~waitpid children 链表加锁~~ **经分析不必要**:`Task::children` 每 Task 私有(CLONE_THREAD 是 sibling 不入 children,fork/clone 加到 `current()->children`,waitpid 扫 `current()->children`,exit 不碰 parent->children,无 reparent)→ 每链表只被拥有任务碰(单 CPU 时刻),无跨核链表访问;唯一跨核 datum 是 child->state(Zombie)x86 原子 + exit unblock 重扫覆盖。process_new.cpp 注释已订正 | ✅(无需) | 74d90a3 | — |
+| M5-3 (R6-Part2) | **lockdep 锁序图**:`kernel/proc/lockdep.{hpp,cpp}` per-CPU 持锁栈(修 Part1 全局深度计数 SMP bug)+ 全局锁序邻接图 + DFS 检 AB-BA 环 + 递归锁检测;edge 表 irq-safe 原始自旋防 IRQ 重入。Spinlock::acquire/release + schedule() 断言接入。opt-in `CINUX_LOCKDEP`(默认 OFF 零开销) | ✅ | (本批) | CINUX_LOCKDEP=ON 875/0 零误报 + AB-BA spike 检出(panic)+ 默认 OFF 875/0 + 全量 host 零警告 |
 
 
 ## ✅ F-INFRA（基建加固）完成 — 2026-06-19

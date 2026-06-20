@@ -5,6 +5,7 @@
 #include "kernel/arch/x86_64/smp.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/address_space.hpp"
+#include "kernel/proc/lockdep.hpp"
 #include "kernel/proc/percpu.hpp"
 
 namespace cinux::proc {
@@ -289,16 +290,16 @@ void Scheduler::schedule() {
     }
 
 #ifdef CINUX_LOCKDEP
-    // F-INFRA I-10: holding a spinlock across the context switch below deadlocks
-    // single-core (the next task cannot release a lock this caller still owns,
-    // and this caller never runs again). Catch it here rather than as a silent
-    // hang. kpanic is noreturn, so the depth it bumps while dumping memstats is
-    // harmless (no re-check of this assert).
-    if (g_lockdep_held_depth > 0) {
+    // F-INFRA I-10 / F4-M5 R6-Part2: holding a spinlock across the context
+    // switch below deadlocks single-core (the next task cannot release a lock
+    // this caller still owns, and this caller never runs again). Catch it here
+    // rather than as a silent hang. lockdep_held_depth() is per-CPU (Part1's
+    // global counter was SMP-unsafe). kpanic is noreturn.
+    if (uint32_t d = lockdep_held_depth(); d > 0) {
         cinux::lib::kpanic(
             "lockdep: schedule() called with %u spinlock(s) held -- "
             "would deadlock (held across context switch)",
-            g_lockdep_held_depth);
+            d);
     }
 #endif
 
