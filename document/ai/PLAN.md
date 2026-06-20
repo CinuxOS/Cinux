@@ -114,6 +114,19 @@
 > 用户决策：①强检查只要真抓问题的（仪式性废）；②禁异常铁律优先，属性尽力而为；③新维度加；④全包 Q1-Q4 + RefCount/UserPtr 都入本 F。
 > 验证：每批 `timeout 40 cmake --build build --target run-kernel-test -j$(nproc)` 绿才提交；改公共接口/InodeOps/mock 补全量 `cmake --build build`；Q4 高风险加 `-smp 2` + UBSAN/LOCKDEP。
 
+### ✅ Q1 完成（2026-06-20，6 commit，875/0 全程绿 + 零警告）
+
+| 批 | 范围 | Commit | 产出 |
+|----|------|--------|------|
+| 批0 | 质量文档分层 + F-QA 立项 | 8bdfaa2 | DIRECTIVES L9 / QUALITY-GATES / prompts / todo/quality + ROADMAP/PLAN |
+| Q1-1 | 零成本警告门禁(7 个 -Werror=) | 3f31a3e | vla/fallthrough/undef/duplicated/logical/format-security + DEBT-015(9 处栈帧) |
+| Q1-2 | ErrorOr class `[[nodiscard]]`(子模块) + test -Wno | 7825710 | expected.hpp(子模块 af80a68) + DEBT-016(32 处 test 忽略) |
+| Q1-3 | CI kernel-tests 6-config matrix | 20b624b | {Debug,Release}×{none,ubsan,lockdep} 并行 |
+| Q1-4 | 测试项数单调不降门禁 | d582a72 | check_test_count.sh(baseline 875) |
+| Q1-5 | host ASAN/UBSAN/gcov 基建 | f938335 | CINUX_HOST_ASAN option + **首跑抓到 DEBT-017 ring_buffer OOB** |
+
+**Q1 收官**：防新债基座落地——编译门禁 + ErrorOr 铁律强化(`[[nodiscard]]`) + CI 多 config 常驻 + 测试项数门禁 + host ASAN 基建。ASAN 首跑即抓 `ring_buffer::push_batch` global-buffer-overflow(DEBT-017，P1，production pipe/keyboard 在用，单核串行潜伏)。3 新债(DEBT-015/016/017)登记。ci.yml host ASAN 待 DEBT-017 修后 flip 启用。下个：Q2 deterministic 审计方法论。
+
 ### 里程碑骨架
 
 | M | 名称 | 批概要 | 风险 |
