@@ -198,6 +198,7 @@ add_cinux_integration_test(shell_redirect
 add_cinux_integration_test(fork_exec
     unit/test_fork_exec.cpp
     ${CMAKE_SOURCE_DIR}/kernel/proc/pid.cpp
+    unit/host_spinlock.cpp
     ${CMAKE_SOURCE_DIR}/kernel/proc/elf_types.cpp
 )
 
