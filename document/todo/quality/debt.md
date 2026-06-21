@@ -27,7 +27,7 @@
 | D1 | 架构不变量 | ⏳ 待审 | DIRECTIVES/ErrorOr/Cinux-Base/层化 |
 | D2 | 内存生命周期（悬垂/UAF/buffer/所有权） | ✅ 已审 2026-06-20 | 见 `reports/2026-06-20-memory-smp-audit.md` |
 | D3 | SMP / 并发安全（F4 多核后） | ✅ 已审 2026-06-20 | 见 `reports/2026-06-20-memory-smp-audit.md` |
-| D4 | 进程 / 线程生命周期 | ⏳ 待审 | fork/clone/exec/exit/wait/signal 状态机 |
+| D4 | 进程 / 线程生命周期 | ✅ 已审 2026-06-21 | DEBT-002 坐实(exit 无 cleanup)；见 `reports/2026-06-21-d4-d13-audit.md` |
 | D5 | 调度 / 迁移 / CPU 上下文 | ⏳ 待审 | ctx switch / GS / TLS / FPU / runqueue |
 | D6 | 用户 / 内核边界 | ⏳ 待审 | user pointer / VMA 权限 / syscall ABI / signal frame |
 | D7 | 错误处理 / 崩溃韧性 | ⏳ 待审 | panic/OOM/栈/递归/诊断 |
@@ -36,10 +36,10 @@
 | D10 | 文档 / 可追溯性 | ⏳ 待审 | TODO/workaround/GOTCHA/notes/PLAN 同步 |
 | D11 | 模块组织 / 可维护性 | ⏳ 待审 | 500 行软上限/重复实现/头依赖 |
 | D12 | 发布 / 回归 / 变更管理 | ⏳ 待审 | 一批一 commit 一验证/回滚点/残余风险 |
-| D13 | 资源配额 / 非堆边界 | ⏳ 待审 | 上限常量一致性/分配点上限/栈上大对象（F-QA Q2 新增） |
+| D13 | 资源配额 / 非堆边界 | ✅ 已审 2026-06-21 | DEBT-018(kMaxCpus 不一致)；见 `reports/2026-06-21-d4-d13-audit.md` |
 | D14 | 整数溢出 / 边界 | ⏳ 待审 | size 算术/用户可控长度溢出/数组索引（F-QA Q2 新增） |
 
-**进度**：2/14 已审（D2/D3）。剩余 12 维度（D1/D4-D14）按用户「每批 2 个、慢慢来」节奏推进。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪（F-QA Q2），见 `document/todo/quality/audit-guide.md`。
+**进度**：4/14 已审（D2/D3/D4/D13）。剩余 10 维度（D1/D5-D12/D14）按用户「每批 2 个、慢慢来」节奏推进。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪（F-QA Q2），见 `document/todo/quality/audit-guide.md`。
 
 ---
 
@@ -71,7 +71,7 @@
 ## 🟠 High
 
 ### DEBT-002 退出任务的 TCB / 核栈 / 地址空间永不释放（系统性泄漏）
-- **维度**: 内存安全　**优先级**: P1　**状态**: 🆕 登记待办（GOTCHA#11 已登记但**等级被低估**）　**核验**: ✅
+- **维度**: 内存安全(D4)　**优先级**: P1　**状态**: 🆕 登记待办（GOTCHA#11 已登记但**等级被低估**）　**核验**: ✅ **Q3-1 坐实**：`remove_task`(scheduler.cpp:190)仅 test/ 调用，production(sys_exit/waitpid/exit_current)从不调 → release_resources 永不触发，Task+资源彻底泄漏。见 `reports/2026-06-21-d4-d13-audit.md`
 - **位置**: `kernel/syscall/sys_exit.cpp:34-74` / `kernel/proc/scheduler.cpp:210-240`(exit_current) / `kernel/proc/process_new.cpp:120-221`(waitpid reap)
 - **现象**: `sys_exit` 只置 Zombie + dequeue + yield；`exit_current` 标 Dead + context_switch 切走；waitpid reap 标 Dead + free pid + 解链 —— **三者都不 delete Task / free 核栈 / delete addr_space**。`release_resources` 只在 operator delete 内调，而 operator delete 只在 fork/clone error-path 触发，正常退出从不跑。
 - **根因**: 缺 task exit cleanup。每个退出进程泄漏 Task(1008B slab)+4 页核栈+整棵 PML4 子树页表。长时间跑 shell 逐步耗尽 KMEM_SLAB 与物理页。更是 DEBT-003/006 的放大器（不做它，引用计数无从谈起）。
@@ -114,6 +114,14 @@
 ---
 
 ## 🟡 Medium
+
+### DEBT-018 `kMaxCpus` 两处定义不一致（同名不同值不同类型）
+- **维度**: 资源配额(D13)　**优先级**: P2　**状态**: 🆕 登记待办（F-QA Q3-1 审计发现）　**核验**: ✅ grep 坐实
+- **位置**: `kernel/drivers/acpi/acpi.hpp:150`(`constexpr size_t kMaxCpus = 16`) / `kernel/proc/percpu.hpp:28`(`constexpr uint32_t kMaxCpus = 8`)
+- **现象**: `kMaxCpus` 两处定义：acpi=16(size_t)、percpu=8(uint32_t)。数组用不同值——`percpu_blocks[8]`/`idle_tasks_[8]`/`gdt_blocks[8]` 用 8；`cpu_apic_ids[16]` 用 16。`ap_main.cpp:189,260` `cpu < proc::kMaxCpus`(8)保护避免 OOB。
+- **根因**: (1) ACPI 报 >8 CPU 时 AP 静默不启动（丢弃，不报错）；(2) 同名常量两值违反单一定义（ODR 风险，编译期 TU 间可静默选其一）；(3) 类型不一致(size_t vs uint32_t)。当前 QEMU -smp 2 不触发，多核(>8)暴露。
+- **修复建议**: 统一单一 kMaxCpus（建议 percpu=8 为权威，acpi 改用之；或显式 `ACPI_MAX_LAPIC=16` 区分 ACPI 表容量 vs 运行 CPU 上限）。加 static_assert 两处相等或删其一。
+- **关联 GOTCHA**: 无
 
 ### DEBT-006 CLONE_VM 共享地址空间无引用计数 → 线程退出损坏共享页表
 - **维度**: 内存安全　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
