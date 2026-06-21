@@ -192,8 +192,9 @@ WaitpidResult waitpid(int pid, int* status, int options, PidAllocator& pid_alloc
             return WaitpidResult::NotExited;
         }
 
-        // Block until a child exits.  sys_exit() sees parent->waiting_for_child
-        // and Scheduler::unblock()s us.  F4-M4 prepare-to-wait: mark Blocked
+        // Block until a child exits.  sys_exit() unconditionally Scheduler::unblock()s
+        // us (F-QA Q4c-1 / DEBT-004: was gated on a non-atomic bool, now unconditional
+        // since unblock is idempotent).  F4-M4 prepare-to-wait: mark Blocked
         // before switching so a concurrent sys_exit() racing through the window
         // finds us Blocked and wakes us (unblock() is idempotent) -- closing the
         // old single-core-only "check+block is atomic" assumption.
@@ -212,10 +213,8 @@ WaitpidResult waitpid(int pid, int* status, int options, PidAllocator& pid_alloc
         //
         // schedule_blocked() -> schedule() needs a real scheduler loop, so this
         // path runs only on real hardware, not in run-kernel-test (kWaitNoHang).
-        parent->waiting_for_child = true;
         Scheduler::prepare_to_wait(parent);
         Scheduler::schedule_blocked();
-        parent->waiting_for_child = false;
         // loop back: the exited child is now Zombie and will be reaped above.
     }
 }

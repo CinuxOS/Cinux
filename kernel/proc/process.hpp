@@ -254,10 +254,6 @@ struct Task {
     /** Pointer to the parent task (nullptr for the kernel init task). */
     Task* parent;
 
-    /** F3-M3 batch 4b: set while this task is blocked inside waitpid() so a
-     *  child's sys_exit can wake it (Scheduler::unblock).  Cleared on resume. */
-    bool waiting_for_child{false};
-
     /** Scheduling class this task belongs to. */
     SchedulingClass* sched_class;
 
