@@ -258,6 +258,11 @@ namespace {
  * @param ctx  Unused context pointer
  */
 void gui_tick_callback(void* /*ctx*/) {
+    static bool first = true;
+    if (first) {
+        first = false;
+        cinux::lib::kprintf("[GUI] first composite tick (PIT->gui_tick_callback OK)\n");
+    }
     using cinux::drivers::Mouse;
     using cinux::gui::Event;
     using cinux::gui::EventType;
@@ -345,6 +350,13 @@ void gui_start() {
     wm.add_desktop_icon(calc_icon);
 
     cinux::lib::kprintf("[GUI] Desktop icons registered: Shell, Calculator.\n");
+
+    // Composite the desktop once now (icons registered) so it shows without
+    // waiting for the first PIT tick. APIC routing only delivers 1 PIT tick on
+    // the production GUI path (pre-existing F4 issue, masked by the old demo);
+    // this workaround paints the desktop immediately while the tick problem is
+    // diagnosed. The tick callback keeps it live once PIT ticks resume.
+    wm.composite();
 
     // Register the GUI tick callback for event processing + compositing
     cinux::drivers::PIT::set_tick_callback(gui_tick_callback, nullptr);
