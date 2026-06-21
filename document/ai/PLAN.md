@@ -154,6 +154,24 @@
 > **关键校正**:D13/D14 锚点先 rg 校准真实符号(`FDTable::alloc`/`PidAllocator::alloc`/`g_pmm.alloc_page`/`e_phnum`/`static_cast<size_t>`),非前轮虚构的 `alloc_fd`/`request_irq`(零命中)。D4 样板 5 锚点 + D13/D14 全部 rg 可跑命中>0。顺手坐实 `kMaxCpus` 不一致(acpi `size_t=16` vs percpu `uint32_t=8`,类型也不同)→ D13 Q3 首审线索。
 > **验证**:文档-only(R0);14 维度齐全(D1-D14)+ 叙述式残留 0 + 抽样锚点全可跑。debt.md 审计计划 12→14 维度。详见 `document/notes/2026-06-21-f-qa-q2-deterministic-audit.md`。下个:**Q3 系统审计**(用 Q2 方法论审 D4/D5/D6/D7/D11 + D13/D14)。
 
+### ✅ Q3 完成（系统审计，14/14 全审）— 2026-06-21，feat/f-qa-q2
+
+> 用 Q2 deterministic 方法论审全 14 维度（5 批：Q3-1 D4+D13 / Q3-2 D5+D6 / Q3-3 D7+D11 / Q3-4 D14+D9 / 收尾 D1+D8+D10+D12）。零风险只读。报告 `document/todo/quality/reports/2026-06-21-d*.md`（5 份）。
+
+| 维度 | 结论 | 债 |
+|------|------|----|
+| D4 进程生命周期 | **fail** | **DEBT-002 精确坐实（P1 头号）**：production Task 退出无 `delete`/`release_resources`（`remove_task` 仅 test 调用）→ Task+sig_actions/fd_table/cwd+核栈+addr_space 泄漏 |
+| D5 调度/迁移 | pass | F4 SMP 清洁（GOTCHA#23/25/26） |
+| D6 用户边界 | warn | DEBT-019（P3 用户指针非 copy，PF 兜底）+ DEBT-012 关联 |
+| D7 错误韧性 | pass | FO 清洁（panic 仅不变量） |
+| D9 静态工具 | pass | F-INFRA/F4-M5/Q1 清洁（host-ASAN 硬门禁） |
+| D11 模块组织 | pass | 源全 <500 + check_line_limits 排除 test/ |
+| D13 资源配额 | fail | **DEBT-018（P2 kMaxCpus 不一致）** |
+| D14 整数溢出 | fail | **DEBT-020（P3 ELF 字段算术）**+ DEBT-012 关联 |
+| D1/D8/D10/D12 | pass/warn | 架构铁律/commit 规范清洁；D8 warn=已知 GOTCHA#11 盲区 |
+
+> **Q3 总结**：新增 3 债（DEBT-018/019/020）+ DEBT-002 精确坐实（P1，Q4 头号目标）。6 维度 pass（F4/FO/F-INFRA/架构清洁）证实前期里程碑扎实。deterministic 方法论首次全量实战（锚点 rg → 读码 → pass/fail 证据 → 登记），可复现。**喂 Q4**：修 DEBT-002 exit cleanup + DEBT-006 AddressSpace refcount（最险，单独 propose）→ DEBT-001/003/004/005。
+
 ### 里程碑骨架
 
 | M | 名称 | 批概要 | 风险 |

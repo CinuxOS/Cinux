@@ -24,22 +24,22 @@
 
 | # | 维度 | 状态 | 备注 |
 |---|------|------|------|
-| D1 | 架构不变量 | ⏳ 待审 | DIRECTIVES/ErrorOr/Cinux-Base/层化 |
+| D1 | 架构不变量 | ✅ 已审 2026-06-21 | pass(无异常/RTTI/禁用头零命中,架构铁律严守)；见 `reports/2026-06-21-d1-d8-d10-d12-audit.md` |
 | D2 | 内存生命周期（悬垂/UAF/buffer/所有权） | ✅ 已审 2026-06-20 | 见 `reports/2026-06-20-memory-smp-audit.md` |
 | D3 | SMP / 并发安全（F4 多核后） | ✅ 已审 2026-06-20 | 见 `reports/2026-06-20-memory-smp-audit.md` |
 | D4 | 进程 / 线程生命周期 | ✅ 已审 2026-06-21 | DEBT-002 坐实(exit 无 cleanup)；见 `reports/2026-06-21-d4-d13-audit.md` |
 | D5 | 调度 / 迁移 / CPU 上下文 | ✅ 已审 2026-06-21 | F4 SMP 清洁(GOTCHA#23/25/26 全 pass)；见 `reports/2026-06-21-d5-d6-audit.md` |
 | D6 | 用户 / 内核边界 | ✅ 已审 2026-06-21 | DEBT-019(用户指针非 copy)+ DEBT-012(phnum)；见 `reports/2026-06-21-d5-d6-audit.md` |
 | D7 | 错误处理 / 崩溃韧性 | ✅ 已审 2026-06-21 | FO 清洁(panic 仅不变量/backtrace/memstats 全 pass)；见 `reports/2026-06-21-d7-d11-audit.md` |
-| D8 | 测试覆盖盲区 | ⏳ 待审 | user-mode PF / SMP 迁移 / 设备路径 |
+| D8 | 测试覆盖盲区 | ✅ 已审 2026-06-21 | warn(875+49 test 广;user-mode/SMP 盲区=GOTCHA#11 已知)；见 `reports/2026-06-21-d1-d8-d10-d12-audit.md` |
 | D9 | 静态 / 动态检查工具 | ✅ 已审 2026-06-21 | F-INFRA/F4-M5/Q1 清洁(UBSAN/lockdep/host-ASAN/static_assert 全 pass)；见 `reports/2026-06-21-d14-d9-audit.md` |
-| D10 | 文档 / 可追溯性 | ⏳ 待审 | TODO/workaround/GOTCHA/notes/PLAN 同步 |
+| D10 | 文档 / 可追溯性 | ✅ 已审 2026-06-21 | pass(TODO 仅 3 处 + PLAN/debt/notes 体系完整)；见 `reports/2026-06-21-d1-d8-d10-d12-audit.md` |
 | D11 | 模块组织 / 可维护性 | ✅ 已审 2026-06-21 | 源全 <500(max 496)+ check_line_limits 排除 test/；见 `reports/2026-06-21-d7-d11-audit.md` |
-| D12 | 发布 / 回归 / 变更管理 | ⏳ 待审 | 一批一 commit 一验证/回滚点/残余风险 |
+| D12 | 发布 / 回归 / 变更管理 | ✅ 已审 2026-06-21 | pass(commit 规范严守,无 Co-Auth;高危用验证矩阵)；见 `reports/2026-06-21-d1-d8-d10-d12-audit.md` |
 | D13 | 资源配额 / 非堆边界 | ✅ 已审 2026-06-21 | DEBT-018(kMaxCpus 不一致)；见 `reports/2026-06-21-d4-d13-audit.md` |
 | D14 | 整数溢出 / 边界 | ✅ 已审 2026-06-21 | DEBT-020(ELF 字段算术)+ DEBT-012(phnum)；见 `reports/2026-06-21-d14-d9-audit.md` |
 
-**进度**：10/14 已审（D2/D3/D4/D5/D6/D7/D9/D11/D13/D14）。**交接重点完成**（D4/D5/D6/D7/D11+D13/D14）。剩余 4 维度（D1/D8/D10/D12，非交接重点）按用户「每批 2 个、慢慢来」节奏推进。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪（F-QA Q2），见 `document/todo/quality/audit-guide.md`。
+**进度**：**14/14 全审完成**（D1-D14，F-QA Q3 收官 2026-06-21）。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪 + 全量实战（F-QA Q2），见 `document/todo/quality/audit-guide.md`。新债 DEBT-018/019/020 + DEBT-002 精确坐实 → 喂 Q4。
 
 ---
 
