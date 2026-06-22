@@ -52,3 +52,9 @@ target_sources(big_kernel_common PRIVATE
 target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/visor_core/visor_swraseter.cpp
 )
+
+# F13 visor §4b: first-class region algebra (Rect + bounded Region). Consumed
+# by the §4c dirty tracker; pure data structure, no host coupling.
+target_sources(big_kernel_common PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/visor_core/visor_region.cpp
+)
