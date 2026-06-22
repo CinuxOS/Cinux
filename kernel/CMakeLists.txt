@@ -247,6 +247,7 @@ add_executable(big_kernel_test
     test/test_kallsyms.cpp
     test/test_backtrace.cpp
     test/test_memory_stats.cpp
+    test/test_visor_swraseter.cpp
 )
 
 target_sources(big_kernel_test PRIVATE $<TARGET_OBJECTS:big_kernel_common>)

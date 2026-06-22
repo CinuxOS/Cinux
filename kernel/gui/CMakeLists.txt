@@ -45,3 +45,10 @@ target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/visor_core/visor_pump.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/visor_core/visor_host_cinux.cpp
 )
+
+# F13 visor §4a: software rasteriser primitives (pure-CPU, integer-only Q8.8
+# blend). Shape skeleton + unit tests only; wired into visor_pump in §4c
+# (staging buffer + dirty region + flush).
+target_sources(big_kernel_common PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/visor_core/visor_swraseter.cpp
+)

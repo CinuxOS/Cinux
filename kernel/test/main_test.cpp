@@ -69,6 +69,7 @@ void run_gui_integration_tests();
 void run_bitmap_icon_tests();
 void run_desktop_tests();
 void run_terminal_tests();
+void run_visor_swraseter_tests();
 void run_pipe_tests();
 void run_sys_pipe_tests();
 void run_terminal_shell_tests();
@@ -201,6 +202,8 @@ extern "C" void kernel_main() {
     run_terminal_tests();
 #ifdef CINUX_GUI
     run_terminal_shell_tests();
+    // F13 visor §4a: SwRaster primitive unit tests.
+    run_visor_swraseter_tests();
 #endif
     cinux::mm::AddressSpace::init_kernel();
     run_address_space_tests();
