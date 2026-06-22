@@ -308,9 +308,11 @@ void WindowManager::draw_desktop_icons(cinux::drivers::Canvas& screen) {
     for (uint32_t i = 0; i < icon_count_; i++) {
         const DesktopIcon& icon = icons_[i];
 
-        // Draw the icon bitmap (transparent pixels are skipped by draw_bitmap)
-        screen.draw_bitmap(static_cast<uint32_t>(icon.x), static_cast<uint32_t>(icon.y), icon.width,
-                           icon.height, icon.bitmap);
+        // Draw the icon bitmap via its 1-bpp alpha mask (§4d): transparency is
+        // mask-driven, not the legacy 0x00000000 colorkey, so opaque pure-black
+        // icon pixels are now draw-able.
+        screen.draw_bitmap_masked(static_cast<uint32_t>(icon.x), static_cast<uint32_t>(icon.y),
+                                  icon.width, icon.height, icon.bitmap, icon.mask);
 
         // Compute label length
         uint32_t label_len = 0;
