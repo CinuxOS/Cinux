@@ -18,6 +18,7 @@
 
 #include "kernel/drivers/mouse.hpp"
 #include "kernel/drivers/pit/pit.hpp"
+#include "kernel/drivers/video/framebuffer.hpp"  // Framebuffer (flush target)
 #include "kernel/gui/event.hpp"
 #include "kernel/gui/gui_init.hpp"  // create_shell_terminal
 #include "kernel/lib/kprintf.hpp"   // kvprintf / kprintf
@@ -29,8 +30,9 @@
 namespace cinux::gui {
 namespace {
 
-visor_host_desktop g_cinux_desktop{};
-visor_host         g_cinux_host{};
+visor_host_desktop           g_cinux_desktop{};
+visor_host                   g_cinux_host{};
+cinux::drivers::Framebuffer* g_fb = nullptr; /* flush forwards dirty rects here (§4c) */
 
 /* ============================================================
  * L2 Input: dequeue one cinux::gui::Event and serialise it to a visor event.
@@ -134,25 +136,61 @@ __attribute__((format(printf, 2, 3))) void cinux_log(void* ctx, const char* fmt,
 }
 
 /* ============================================================
- * L1 Display: flush.
+ * L1 Display: flush a dirty rect from the staging buffer to the framebuffer.
  *
- * §3b: unused. visor core does not render yet -- WindowManager::composite()
- * draws straight to the framebuffer, so visor_pump() never calls flush().
- * Real forwarding to the Canvas back buffer (or DMA / SPI on other hosts)
- * arrives in §4 when the SwRaster render engine owns the staging buffer.
- * Kept as a no-op so the core table is complete and the ABI is machine-
- * checkable; the Cinux-specific forwarding is a §4 concern, not YAGNI now.
+ * §4c: the visor pump renders into the screen canvas's back buffer (the
+ * staging Surface) and pushes only the dirty rects through this callback.
+ * @p pixels is the staging buffer base; the rect at display coords (x,y,w,h)
+ * lives at row offset y*stride + x*4 within it. We copy each row into the VBE
+ * framebuffer (volatile MMIO), respecting its own pitch (VBE line alignment
+ * may exceed width*4). This replaces the old Canvas::flip() full-frame copy --
+ * identical pixels, but only the dirty rects are transferred and the display
+ * path now runs through the Host ABI (host-agnostic).
  * ============================================================ */
 void cinux_flush(void* ctx, int x, int y, int w, int h, const void* pixels, uint32_t stride,
                  visor_pixel_format fmt) {
     (void)ctx;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)pixels;
-    (void)stride;
-    (void)fmt;
+    if (g_fb == nullptr || pixels == nullptr || w <= 0 || h <= 0) {
+        return;
+    }
+    if (fmt != VISOR_PIX_XRGB8888) {
+        return; /* Desktop framebuffer is 32bpp XRGB; other formats arrive later */
+    }
+
+    const uint32_t fb_pitch = g_fb->pitch();
+    const uint32_t fb_w     = g_fb->width();
+    const uint32_t fb_h     = g_fb->height();
+    /* Clamp the rect to the framebuffer: a rect larger than the screen is
+     * ill-formed, and this also bounds w before the *4u below so a pathological
+     * caller (the flush is the single hard host seam) cannot wrap bytes_per_row. */
+    if (w > static_cast<int>(fb_w)) {
+        w = static_cast<int>(fb_w);
+    }
+    if (h > static_cast<int>(fb_h)) {
+        h = static_cast<int>(fb_h);
+    }
+    const uint8_t*    src           = static_cast<const uint8_t*>(pixels);
+    volatile uint8_t* dst           = reinterpret_cast<volatile uint8_t*>(g_fb->data());
+    const uint32_t    bytes_per_row = static_cast<uint32_t>(w) * 4u;
+
+    for (int row = 0; row < h; row++) {
+        const int py = y + row;
+        /* Dirty rects are clipped to screen bounds by WindowManager::invalidate,
+         * but defend against a misbehaving caller regardless. */
+        if (py < 0 || static_cast<uint32_t>(py) >= fb_h || x < 0 ||
+            static_cast<uint32_t>(x) >= fb_w) {
+            continue;
+        }
+        const uint32_t cols = (static_cast<uint32_t>(x) + bytes_per_row / 4u <= fb_w)
+                                  ? bytes_per_row
+                                  : (fb_w - static_cast<uint32_t>(x)) * 4u;
+        const uint8_t* srow = src + static_cast<size_t>(py) * stride + static_cast<size_t>(x) * 4u;
+        volatile uint8_t* drow =
+            dst + static_cast<size_t>(py) * fb_pitch + static_cast<size_t>(x) * 4u;
+        for (uint32_t b = 0; b < cols; b++) {
+            drow[b] = srow[b];
+        }
+    }
 }
 
 /* ============================================================
@@ -184,7 +222,8 @@ visor_host& cinux_visor_host() {
     return g_cinux_host;
 }
 
-void cinux_visor_host_init() {
+void cinux_visor_host_init(cinux::drivers::Framebuffer* fb) {
+    g_fb                               = fb;
     g_cinux_host.core.poll_event       = cinux_poll_event;
     g_cinux_host.core.flush            = cinux_flush;
     g_cinux_host.core.flush_complete   = nullptr; /* Desktop uses sync flush */

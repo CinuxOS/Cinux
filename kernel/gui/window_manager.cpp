@@ -201,8 +201,64 @@ void WindowManager::composite() {
     // Draw the mouse cursor on top of everything
     draw_cursor(*screen_);
 
-    // Present the composed frame to the hardware framebuffer
-    screen_->flip();
+    // F13 §4c: the frame is NOT presented here. The visor pump flushes the dirty
+    // region to the host (which forwards to the framebuffer) after composite()
+    // returns. See visor_pump(). Behaviour is identical to the old flip(); the
+    // display path now runs through the Host ABI so it is host-agnostic.
+}
+
+// ============================================================
+// Dirty region (F13 §4c)
+// ============================================================
+
+void WindowManager::invalidate(const visor::Rect& r) {
+    if (screen_ == nullptr || r.empty()) {
+        return;
+    }
+    /* Clip to the screen so we never track off-screen area. */
+    visor::Rect clipped =
+        visor::rect_intersect(r, visor::Rect{0, 0, static_cast<int32_t>(screen_->width()),
+                                             static_cast<int32_t>(screen_->height())});
+    if (!clipped.empty()) {
+        dirty_.add(clipped);
+    }
+}
+
+void WindowManager::invalidate_all() {
+    if (screen_ == nullptr) {
+        return;
+    }
+    invalidate(visor::Rect{0, 0, static_cast<int32_t>(screen_->width()),
+                           static_cast<int32_t>(screen_->height())});
+}
+
+void WindowManager::invalidate_cursor_move() {
+    if (screen_ == nullptr) {
+        return;
+    }
+    const int32_t cx = cinux::drivers::Mouse::x();
+    const int32_t cy = cinux::drivers::Mouse::y();
+
+    /* First frame: no previous footprint -- flush everything to be safe. */
+    if (last_cursor_x_ == kCursorInvalid || last_cursor_y_ == kCursorInvalid) {
+        invalidate_all();
+        last_cursor_x_ = cx;
+        last_cursor_y_ = cy;
+        return;
+    }
+
+    if (cx != last_cursor_x_ || cy != last_cursor_y_) {
+        /* The cursor bitmap is 16x16 with a 1px outline; pad by 2px each side
+         * so the old + new footprints (outline included) are fully covered.
+         * Over-cover is safe; the back buffer is always fully repainted. */
+        const int32_t pad      = 2;
+        const int32_t cur_size = static_cast<int32_t>(CURSOR_SIZE);
+        invalidate(visor::Rect{last_cursor_x_ - pad, last_cursor_y_ - pad,
+                               last_cursor_x_ + cur_size + pad, last_cursor_y_ + cur_size + pad});
+        invalidate(visor::Rect{cx - pad, cy - pad, cx + cur_size + pad, cy + cur_size + pad});
+    }
+    last_cursor_x_ = cx;
+    last_cursor_y_ = cy;
 }
 
 // ============================================================
@@ -321,7 +377,7 @@ void WindowManager::handle_mouse(Event& ev) {
         if (hit->is_close_button_hit(ev.mouse.x, ev.mouse.y)) {
             uint32_t dead_id = hit->id();
             destroy(dead_id);
-            composite();
+            invalidate_all(); /* z-order/focus changed -> full re-flush */
             break;
         }
 
@@ -337,7 +393,7 @@ void WindowManager::handle_mouse(Event& ev) {
             drag_offset_y_ = ev.mouse.y - hit->y();
         }
 
-        composite();
+        invalidate_all(); /* raise changes z-order -> full re-flush */
         break;
     }
 
@@ -354,7 +410,7 @@ void WindowManager::handle_mouse(Event& ev) {
             }
             focused_->draw_content();
 
-            composite();
+            invalidate_all(); /* window moved -> full re-flush (exposure-safe) */
         }
         break;
     }

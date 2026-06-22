@@ -10,7 +10,7 @@
  *   now_ms      -> PIT::get_uptime_ms()
  *   alloc/free  -> kmalloc/kfree
  *   log         -> kvprintf
- *   flush       -> (reserved, §4 render engine)
+ *   flush       -> forward dirty rect: staging back buffer -> VBE framebuffer (§4c)
  *   desktop.spawn -> cinux::gui::create_shell_terminal()
  *
  * Swap this fill for an SDL simulator / MCU table fill and the same visor_pump
@@ -26,6 +26,10 @@
 #include "visor_host.h"
 
 #ifdef __cplusplus
+
+namespace cinux::drivers {
+class Framebuffer;
+}
 
 namespace cinux::gui {
 
@@ -44,9 +48,13 @@ visor_host& cinux_visor_host();
  * @brief Fill the Cinux host descriptor (call once after gui_init())
  *
  * Wires every core callback + the Desktop extension and binds the opaque ctx.
- * Idempotent: safe to call again to rebind after a subsystem reset.
+ * @p fb is the hardware framebuffer the flush callback forwards dirty rects to
+ * (F13 §4c); pass the screen canvas's framebuffer(). Idempotent.
+ *
+ * @param fb  The VBE framebuffer to forward flushed rects to (may be null,
+ *            in which case flush is a no-op)
  */
-void cinux_visor_host_init();
+void cinux_visor_host_init(cinux::drivers::Framebuffer* fb = nullptr);
 
 }  // namespace cinux::gui
 

@@ -233,19 +233,23 @@ void gui_start() {
 
     cinux::lib::kprintf("[GUI] Desktop icons registered: Shell, Calculator.\n");
 
-    // Composite the desktop once now (icons registered) so it shows immediately.
-    // Ongoing refresh is driven by the gui_worker thread calling visor_pump() in a
-    // loop (see init.cpp), NOT by a PIT IRQ callback. This removes the GUI's
-    // dependency on PIT tick delivery, which only fires once under APIC routing
-    // on the production path (pre-existing F4 issue) -- the worker pump keeps
-    // the screen live regardless of whether PIT ticks arrive.
+    // Composite the desktop once now (icons registered) so the staging back
+    // buffer is populated. Ongoing refresh is driven by the gui_worker thread
+    // calling visor_pump() in a loop (see init.cpp), NOT by a PIT IRQ callback.
+    // This removes the GUI's dependency on PIT tick delivery, which only fires
+    // once under APIC routing on the production path (pre-existing F4 issue) --
+    // the worker pump keeps the screen live regardless of whether PIT ticks
+    // arrive. F13 §4c: composite() renders the back buffer only; the pump
+    // flushes the dirty region to the host. Mark the whole screen dirty so the
+    // first pump iteration pushes the initial desktop.
     wm.composite();
+    wm.invalidate_all();
     cinux::lib::kprintf("[GUI] desktop composited; refresh driven by gui_worker pump loop.\n");
 
-    // Initialise the visor Host ABI adapter (F13 §3b): fills the host table that
-    // the gui_worker's visor_pump() drives. The callbacks just forward to the
-    // facilities wired above, so behaviour is unchanged.
-    cinux_visor_host_init();
+    // Initialise the visor Host ABI adapter (F13 §3b/§4c): fills the host table
+    // that the gui_worker's visor_pump() drives. The callbacks forward to the
+    // facilities wired above; flush forwards dirty rects to the framebuffer.
+    cinux_visor_host_init(g_screen != nullptr ? g_screen->framebuffer() : nullptr);
 }
 
 }  // namespace cinux::gui

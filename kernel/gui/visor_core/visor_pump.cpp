@@ -23,6 +23,7 @@
 #include "kernel/lib/string.hpp"  // memcpy (freestanding, GOTCHA#9)
 #include "visor_event.h"
 #include "visor_event_payload.h"
+#include "visor_region.hpp"  // visor::Region / Rect (dirty flush)
 
 namespace cinux::gui {
 namespace {
@@ -154,21 +155,66 @@ void visor_pump(visor_host* host) {
         } else {
             create_shell_terminal();
         }
+        /* A new window appeared -- structural change, re-flush the frame. */
+        wm.invalidate_all();
     }
 
-    /* 3. Poll terminal output and composite -- the legacy render path. The
-     *    visor render engine (SwRaster + staging buffer) takes over in §4;
-     *    until then composite() draws straight to the framebuffer exactly as
-     *    gui_pump() does, so behaviour is unchanged. */
+    /* 3. Poll terminal output. poll_output() signals whether the shell produced
+     *    data this iteration; any output dirties the screen (conservatively the
+     *    whole frame -- terminal redraws can span the window). The terminal's
+     *    own canvas is rendered regardless so it is fresh when composite()
+     *    blits it. */
     for (uint32_t i = 0; i < wm.window_count(); i++) {
         auto* win = wm.window_at(i);
         if (win != nullptr && win->is_terminal()) {
             auto* term = static_cast<Terminal*>(win);
-            term->poll_output();
+            if (term->poll_output()) {
+                wm.invalidate_all();
+            }
+            /* A pipe-less terminal mutates content via on_key() without going
+             * through the stdout pipe, so poll_output() misses it; consume its
+             * content-dirty flag so a direct key echo still reaches the screen. */
+            if (term->consume_content_dirty()) {
+                wm.invalidate_all();
+            }
             term->render_to_canvas();
         }
     }
+
+    /* 4. Cursor footprint: if the mouse moved since last frame, mark the old +
+     *    new cursor rects dirty. No-op when still; full-screen on first frame. */
+    wm.invalidate_cursor_move();
+
+    /* 5. Render + flush only when something changed (dirty non-empty). Idle
+     *    iterations skip both composite() and the flush -- a real win over the
+     *    old per-frame full flip(). composite() repaints the whole staging back
+     *    buffer (always fresh); the host forwards exactly the dirty rects, so
+     *    over-coverage is a perf cost, never a stale-pixel bug. */
+    if (wm.dirty().empty()) {
+        return;
+    }
+
     wm.composite();
+
+    /* Push each dirty rect through the Host ABI flush. The Cinux adapter
+     * forwards the rect from the staging back buffer to the framebuffer; the
+     * pixels pointer is the buffer base and (x,y,w,h) locates the dirty rect
+     * within it. See visor_host.h for the flush contract. */
+    if (host->core.flush != nullptr) {
+        auto* screen = wm.screen();
+        if (screen != nullptr && screen->back_buffer() != nullptr) {
+            uint32_t*            base   = screen->back_buffer();
+            const uint32_t       stride = screen->pitch();
+            const visor::Region& dirty  = wm.dirty();
+            for (uint32_t i = 0; i < dirty.count(); i++) {
+                const visor::Rect& r = dirty.rects()[i];
+                host->core.flush(host->ctx, r.x0, r.y0, static_cast<int>(r.width()),
+                                 static_cast<int>(r.height()), base, stride, VISOR_PIX_XRGB8888);
+            }
+        }
+    }
+
+    wm.clear_dirty();
 }
 
 }  // namespace cinux::gui

@@ -180,6 +180,25 @@ public:
     uint32_t height() const { return height_; }
     uint32_t pitch() const { return pitch_; }
 
+    /**
+     * @brief Underlying back (staging) buffer, as a flat uint32_t row-major span
+     *
+     * The visor render engine treats this as its staging Surface (F13 §4c): the
+     * compositor renders into it and the host flushes dirty rects out of it.
+     * Rows are spaced @p pitch() bytes apart, so row r column c is at
+     * `back_buffer()[r * (pitch()/4) + c]`.
+     */
+    uint32_t* back_buffer() const { return back_buf_; }
+
+    /**
+     * @brief The hardware framebuffer this canvas flips onto (nullptr if none)
+     *
+     * A standalone canvas (init(w,h)) has no framebuffer; the screen canvas
+     * references the VBE framebuffer it was initialised from. The Cinux host
+     * adapter reads this to forward flushed rects to the display (F13 §4c).
+     */
+    Framebuffer* framebuffer() const { return front_buf_; }
+
 private:
     Framebuffer* front_buf_ = nullptr;
     uint32_t*    back_buf_  = nullptr;

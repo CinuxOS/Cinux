@@ -71,6 +71,7 @@ void run_desktop_tests();
 void run_terminal_tests();
 void run_visor_swraseter_tests();
 void run_visor_region_tests();
+void run_visor_dirty_tests();
 void run_pipe_tests();
 void run_sys_pipe_tests();
 void run_terminal_shell_tests();
@@ -207,6 +208,8 @@ extern "C" void kernel_main() {
     run_visor_swraseter_tests();
     // F13 visor §4b: region algebra unit tests.
     run_visor_region_tests();
+    // F13 visor §4c: dirty-region + flush path tests.
+    run_visor_dirty_tests();
 #endif
     cinux::mm::AddressSpace::init_kernel();
     run_address_space_tests();

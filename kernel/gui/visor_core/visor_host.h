@@ -48,9 +48,22 @@ typedef enum {
  * ============================================================ */
 typedef struct {
     /* ---- L1 Display backend: flush model (v2) ----
-     * Core owns the staging/render buffer. After rendering a rect it pushes
-     * the pixels to the backend for display. Replaces begin_frame->pointer
-     * (unsafe for STREAM-PAGE / SPI DMA / user-space shared buffer). */
+     * Core owns the staging/render buffer. After rendering it pushes each dirty
+     * rect to the backend for display. Replaces begin_frame->pointer (unsafe
+     * for STREAM-PAGE / SPI DMA / user-space shared buffer).
+     *
+     * Contract: @p pixels is the BASE of the staging buffer (not the rect's
+     * top-left); @p x,@p y,@p w,@p h locate the dirty rect in display coords;
+     * @p stride is the staging buffer's row stride in bytes (row r of the rect
+     * is at pixels + (y+r)*stride + x*bpp). The backend copies that rect to the
+     * display, honouring its own pitch. Multiple flush calls per frame are
+     * possible (one per dirty rect); @p flush_complete signals when all are
+     * pushed and the buffer is reusable.
+     *
+     * A Desktop host MUST provide flush: the pump composites into the staging
+     * buffer and presents ONLY through this callback, so a NULL flush means
+     * rendered frames never reach the display (the dirty region is still
+     * consumed, so the display silently freezes until a new change). */
     void (*flush)(void* ctx, int x, int y, int w, int h, const void* pixels, uint32_t stride,
                   visor_pixel_format fmt);
     void (*flush_complete)(void* ctx); /* host -> core: last async flush done, buffer reusable */
