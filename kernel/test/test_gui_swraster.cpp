@@ -1,12 +1,12 @@
 /**
- * @file kernel/test/test_cgui_swraseter.cpp
- * @brief QEMU in-kernel tests for the cgui SwRaster primitives (F13 §4a)
+ * @file kernel/test/test_gui_swraster.cpp
+ * @brief QEMU in-kernel tests for the cinux::gui SwRaster primitives (F13 §4a)
  *
  * Pure-logic tests: each builds a small stack Surface, runs a primitive, and
  * asserts exact pixel values. SwRaster is not wired into pump yet (§4a
  * is the shape skeleton); these tests are its only consumer until §4c.
  *
- * Compile condition: CINUX_GUI (cgui_swraseter lives under kernel/gui).
+ * Compile condition: CINUX_GUI (swraster lives under kernel/gui).
  */
 
 #include <stdint.h>
@@ -14,20 +14,21 @@
 #include "big_kernel_test.h"
 
 #ifdef CINUX_GUI
-#    include "cgui/core/cgui_swraseter.hpp"
+#    include "third_party/Cinux-GUI/core/swraster.hpp"
 #endif
 
 #ifdef CINUX_GUI
 
 using cinux::gui::ClipRect;
 using cinux::gui::Surface;
+using cinux::gui::PixelFormat;
 
 /* Build a tight (stride == width*4) XRGB8888 surface over a stack buffer. */
 static Surface make_surface(uint32_t* buf, uint32_t w, uint32_t h) {
-    return Surface{buf, w, h, w * 4u, CGUI_PIX_XRGB8888};
+    return Surface{buf, w, h, w * 4u, PixelFormat::kXrgb8888};
 }
 
-namespace test_cgui_fill {
+namespace test_gui_fill {
 void test_fill_basic() {
     uint32_t buf[16] = {0};
     Surface  s       = make_surface(buf, 4, 4);
@@ -60,9 +61,9 @@ void test_fill_clip_rect() {
     TEST_ASSERT_EQ(buf[1 * 4 + 1], 0x000000FFu);
     TEST_ASSERT_EQ(buf[3 * 4 + 3], 0u); /* outside clip, untouched */
 }
-}  // namespace test_cgui_fill
+}  // namespace test_gui_fill
 
-namespace test_cgui_blit {
+namespace test_gui_blit {
 void test_blit_basic() {
     uint32_t src_buf[4]  = {0x00111111u, 0x00222222u, 0x00333333u, 0x00444444u};
     uint32_t dst_buf[16] = {0};
@@ -92,9 +93,9 @@ void test_blit_partial_clip() {
     TEST_ASSERT_EQ(dst_buf[3 * 4 + 3], src_buf[1 * 4 + 1]);
     TEST_ASSERT_EQ(dst_buf[0], 0u); /* untouched */
 }
-}  // namespace test_cgui_blit
+}  // namespace test_gui_blit
 
-namespace test_cgui_blend {
+namespace test_gui_blend {
 void test_blend_zero() {
     uint32_t src_buf[4] = {0x00FFFFFFu, 0x00FFFFFFu, 0x00FFFFFFu, 0x00FFFFFFu};
     uint32_t dst_buf[4] = {0x00000000u, 0x00FF0000u, 0x0000FF00u, 0x000000FFu};
@@ -128,9 +129,9 @@ void test_blend_half() {
     TEST_ASSERT_EQ(r, 127u);
     TEST_ASSERT_EQ(b, 127u);
 }
-}  // namespace test_cgui_blend
+}  // namespace test_gui_blend
 
-namespace test_cgui_glyph {
+namespace test_gui_glyph {
 void test_glyph_mask() {
     /* 8x2 glyph, MSB-first per row:
      *   row0 = 0b10101010 = 0xAA (cols 0,2,4,6 set)
@@ -150,9 +151,9 @@ void test_glyph_mask() {
     TEST_ASSERT_EQ(buf[1 * 8 + 4], 0x00FFFFFFu);
     TEST_ASSERT_EQ(buf[1 * 8 + 7], 0x00FFFFFFu);
 }
-}  // namespace test_cgui_glyph
+}  // namespace test_gui_glyph
 
-namespace test_cgui_line {
+namespace test_gui_line {
 void test_line_horizontal() {
     uint32_t buf[16] = {0};
     Surface  s       = make_surface(buf, 4, 4);
@@ -172,14 +173,14 @@ void test_line_clip() {
     TEST_ASSERT_EQ(buf[0 * 4 + 0], 0x0000FF00u);
     TEST_ASSERT_EQ(buf[0 * 4 + 1], 0x0000FF00u);
 }
-}  // namespace test_cgui_line
+}  // namespace test_gui_line
 
-namespace test_cgui_stride {
+namespace test_gui_stride {
 void test_stride_padding() {
     /* width=4 but stride=24 bytes (6 pixels/row): 2 padding columns per row.
      * fill_rect must index via stride, not width, and not overrun. */
     uint32_t buf[6 * 4] = {0}; /* 6 pixels/row * 4 rows */
-    Surface  s{buf, 4, 4, 24u, CGUI_PIX_XRGB8888};
+    Surface  s{buf, 4, 4, 24u, PixelFormat::kXrgb8888};
     cinux::gui::fill_rect(s, 0, 0, 4, 4, 0x00BBCCDDu, nullptr);
     /* Every logical pixel filled; padding columns untouched. */
     for (uint32_t r = 0; r < 4; r++) {
@@ -190,22 +191,22 @@ void test_stride_padding() {
         TEST_ASSERT_EQ(buf[r * 6 + 5], 0u);
     }
 }
-}  // namespace test_cgui_stride
+}  // namespace test_gui_stride
 
-extern "C" void run_cgui_swraseter_tests() {
-    TEST_SECTION("cgui SwRaster Tests (F13 §4a)");
-    RUN_TEST(test_cgui_fill::test_fill_basic);
-    RUN_TEST(test_cgui_fill::test_fill_clip_surface);
-    RUN_TEST(test_cgui_fill::test_fill_clip_rect);
-    RUN_TEST(test_cgui_blit::test_blit_basic);
-    RUN_TEST(test_cgui_blit::test_blit_partial_clip);
-    RUN_TEST(test_cgui_blend::test_blend_zero);
-    RUN_TEST(test_cgui_blend::test_blend_full);
-    RUN_TEST(test_cgui_blend::test_blend_half);
-    RUN_TEST(test_cgui_glyph::test_glyph_mask);
-    RUN_TEST(test_cgui_line::test_line_horizontal);
-    RUN_TEST(test_cgui_line::test_line_clip);
-    RUN_TEST(test_cgui_stride::test_stride_padding);
+extern "C" void run_gui_swraster_tests() {
+    TEST_SECTION("cinux::gui SwRaster Tests (F13 §4a)");
+    RUN_TEST(test_gui_fill::test_fill_basic);
+    RUN_TEST(test_gui_fill::test_fill_clip_surface);
+    RUN_TEST(test_gui_fill::test_fill_clip_rect);
+    RUN_TEST(test_gui_blit::test_blit_basic);
+    RUN_TEST(test_gui_blit::test_blit_partial_clip);
+    RUN_TEST(test_gui_blend::test_blend_zero);
+    RUN_TEST(test_gui_blend::test_blend_full);
+    RUN_TEST(test_gui_blend::test_blend_half);
+    RUN_TEST(test_gui_glyph::test_glyph_mask);
+    RUN_TEST(test_gui_line::test_line_horizontal);
+    RUN_TEST(test_gui_line::test_line_clip);
+    RUN_TEST(test_gui_stride::test_stride_padding);
     TEST_SUMMARY();
 }
 
@@ -213,6 +214,6 @@ extern "C" void run_cgui_swraseter_tests() {
 
 /* Non-GUI build: SwRaster is not compiled, expose an empty runner so the
  * main_test forward declaration links. main_test only calls it under GUI. */
-extern "C" void run_cgui_swraseter_tests() {}
+extern "C" void run_gui_swraster_tests() {}
 
 #endif /* CINUX_GUI */

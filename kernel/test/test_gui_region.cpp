@@ -1,13 +1,13 @@
 /**
- * @file kernel/test/test_cgui_region.cpp
- * @brief QEMU in-kernel tests for the cgui region algebra (F13 §4b)
+ * @file kernel/test/test_gui_region.cpp
+ * @brief QEMU in-kernel tests for the cinux::gui region algebra (F13 §4b)
  *
  * Pure-logic tests: each builds Rects / a Region, runs an operation, and
  * asserts exact results. The degenerate (empty) and capacity-collapse paths
  * are exercised explicitly -- those are what keep dirty regions from dropping
  * pixels.
  *
- * Compile condition: CINUX_GUI (cgui_region lives under kernel/gui).
+ * Compile condition: CINUX_GUI (region lives under kernel/gui).
  */
 
 #include <stdint.h>
@@ -15,7 +15,7 @@
 #include "big_kernel_test.h"
 
 #ifdef CINUX_GUI
-#    include "cgui/core/cgui_region.hpp"
+#    include "third_party/Cinux-GUI/core/region.hpp"
 #endif
 
 #ifdef CINUX_GUI
@@ -23,7 +23,7 @@
 using cinux::gui::Rect;
 using cinux::gui::Region;
 
-namespace test_cgui_rect {
+namespace test_Rect {
 
 void test_intersect_overlap() {
     Rect a{0, 0, 10, 10};
@@ -93,9 +93,9 @@ void test_empty_degenerate() {
     TEST_ASSERT_FALSE((Rect{0, 0, 1, 1}.empty()));
 }
 
-}  // namespace test_cgui_rect
+}  // namespace test_Rect
 
-namespace test_cgui_subtract {
+namespace test_gui_subtract {
 
 void test_subtract_no_overlap() {
     Rect     a{0, 0, 4, 4};
@@ -157,9 +157,9 @@ void test_subtract_edge_touch() {
     TEST_ASSERT_EQ(out[1].y1, 4);
 }
 
-}  // namespace test_cgui_subtract
+}  // namespace test_gui_subtract
 
-namespace test_cgui_region {
+namespace test_gui_region {
 
 void test_region_add_bounds() {
     Region reg;
@@ -261,36 +261,36 @@ void test_region_capacity_collapse() {
     TEST_ASSERT_EQ(b.y1, 1);
 }
 
-}  // namespace test_cgui_region
+}  // namespace test_gui_region
 
-extern "C" void run_cgui_region_tests() {
-    TEST_SECTION("cgui Region Tests (F13 §4b)");
-    RUN_TEST(test_cgui_rect::test_intersect_overlap);
-    RUN_TEST(test_cgui_rect::test_intersect_disjoint_degenerate);
-    RUN_TEST(test_cgui_rect::test_union_envelope);
-    RUN_TEST(test_cgui_rect::test_union_one_empty);
-    RUN_TEST(test_cgui_rect::test_translate);
-    RUN_TEST(test_cgui_rect::test_contains_point);
-    RUN_TEST(test_cgui_rect::test_contains_rect);
-    RUN_TEST(test_cgui_rect::test_empty_degenerate);
-    RUN_TEST(test_cgui_subtract::test_subtract_no_overlap);
-    RUN_TEST(test_cgui_subtract::test_subtract_hole_all_four);
-    RUN_TEST(test_cgui_subtract::test_subtract_covers_all);
-    RUN_TEST(test_cgui_subtract::test_subtract_edge_touch);
-    RUN_TEST(test_cgui_region::test_region_add_bounds);
-    RUN_TEST(test_cgui_region::test_region_add_ignores_degenerate);
-    RUN_TEST(test_cgui_region::test_region_intersect);
-    RUN_TEST(test_cgui_region::test_region_intersect_drops_outside);
-    RUN_TEST(test_cgui_region::test_region_translate);
-    RUN_TEST(test_cgui_region::test_region_subtract);
-    RUN_TEST(test_cgui_region::test_region_clear);
-    RUN_TEST(test_cgui_region::test_region_bounds_empty);
-    RUN_TEST(test_cgui_region::test_region_capacity_collapse);
+extern "C" void run_gui_region_tests() {
+    TEST_SECTION("cinux::gui Region Tests (F13 §4b)");
+    RUN_TEST(test_Rect::test_intersect_overlap);
+    RUN_TEST(test_Rect::test_intersect_disjoint_degenerate);
+    RUN_TEST(test_Rect::test_union_envelope);
+    RUN_TEST(test_Rect::test_union_one_empty);
+    RUN_TEST(test_Rect::test_translate);
+    RUN_TEST(test_Rect::test_contains_point);
+    RUN_TEST(test_Rect::test_contains_rect);
+    RUN_TEST(test_Rect::test_empty_degenerate);
+    RUN_TEST(test_gui_subtract::test_subtract_no_overlap);
+    RUN_TEST(test_gui_subtract::test_subtract_hole_all_four);
+    RUN_TEST(test_gui_subtract::test_subtract_covers_all);
+    RUN_TEST(test_gui_subtract::test_subtract_edge_touch);
+    RUN_TEST(test_gui_region::test_region_add_bounds);
+    RUN_TEST(test_gui_region::test_region_add_ignores_degenerate);
+    RUN_TEST(test_gui_region::test_region_intersect);
+    RUN_TEST(test_gui_region::test_region_intersect_drops_outside);
+    RUN_TEST(test_gui_region::test_region_translate);
+    RUN_TEST(test_gui_region::test_region_subtract);
+    RUN_TEST(test_gui_region::test_region_clear);
+    RUN_TEST(test_gui_region::test_region_bounds_empty);
+    RUN_TEST(test_gui_region::test_region_capacity_collapse);
     TEST_SUMMARY();
 }
 
 #else /* !CINUX_GUI */
 
-extern "C" void run_cgui_region_tests() {}
+extern "C" void run_gui_region_tests() {}
 
 #endif /* CINUX_GUI */

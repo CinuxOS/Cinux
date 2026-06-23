@@ -32,11 +32,11 @@ target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/terminal.cpp
 )
 
-# F13 cgui: the host-neutral core now lives at top-level cgui/ (built as the
-# cgui_core STATIC lib, linked into the kernel from kernel/CMakeLists.txt).
+# F13 cinux-gui: the host-neutral core now lives at third_party/Cinux-GUI/ (built as the
+# cinux-gui STATIC lib, linked into the kernel from kernel/CMakeLists.txt).
 # kernel/gui/ keeps ONLY the Cinux host adapter -- the single host-specific TU
 # that fills the ABI table against the kernel's drivers/framebuffer. The core
-# (pump / region / swraseter / abi_check) compiles standalone; see cgui/host/.
+# (pump / region / swraseter / abi_check) compiles standalone; see host/ (standalone).
 target_sources(big_kernel_common PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/cgui_host_cinux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_cinux.cpp
 )

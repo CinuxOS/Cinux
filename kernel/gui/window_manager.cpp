@@ -201,7 +201,7 @@ void WindowManager::composite() {
     // Draw the mouse cursor on top of everything
     draw_cursor(*screen_);
 
-    // F13 §4c: the frame is NOT presented here. The cgui pump flushes the dirty
+    // F13 §4c: the frame is NOT presented here. The cinux::gui pump flushes the dirty
     // region to the host (which forwards to the framebuffer) after composite()
     // returns. See pump(). Behaviour is identical to the old flip(); the
     // display path now runs through the Host ABI so it is host-agnostic.

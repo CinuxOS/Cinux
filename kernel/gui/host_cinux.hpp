@@ -1,12 +1,12 @@
 /**
- * @file kernel/gui/cgui_host_cinux.hpp
- * @brief Cinux host adapter -- fills the cgui_host table for the in-kernel desktop
+ * @file kernel/gui/host_cinux.hpp
+ * @brief Cinux host adapter -- fills the Host table for the in-kernel desktop
  *
- * The Host ABI table (cgui_host.h) is the ONLY hard seam between cgui core
- * and host. This unit fills that table for the Cinux kernel desktop so cgui
+ * The Host ABI table (host.hpp) is the ONLY hard seam between cinux::gui core
+ * and host. This unit fills that table for the Cinux kernel desktop so cinux::gui
  * core can run here: every callback forwards to an existing in-tree facility.
  *
- *   poll_event  -> Mouse::event_queue()          (serialised to cgui_event)
+ *   poll_event  -> Mouse::event_queue()          (serialised to event)
  *   now_ms      -> PIT::get_uptime_ms()
  *   alloc/free  -> kmalloc/kfree
  *   log         -> kvprintf
@@ -22,7 +22,7 @@
  */
 #pragma once
 
-#include "cgui/core/cgui_host.h"
+#include "third_party/Cinux-GUI/core/host.hpp"
 
 #ifdef __cplusplus
 
@@ -41,7 +41,7 @@ namespace cinux::gui {
  *
  * @return reference to the static Cinux host descriptor
  */
-cgui_host& cinux_host();
+Host& cinux_host();
 
 /**
  * @brief Fill the Cinux host descriptor (call once after gui_init())

@@ -18,7 +18,7 @@
 #include "kernel/gui/desktop_icon.hpp"
 #include "kernel/gui/icon.hpp"
 #include "kernel/gui/terminal.hpp"
-#include "kernel/gui/cgui_host_cinux.hpp"
+#include "kernel/gui/host_cinux.hpp"
 #include "kernel/gui/window_manager.hpp"
 #include "kernel/ipc/pipe.hpp"
 #include "kernel/ipc/pipe_ops.hpp"
@@ -248,7 +248,7 @@ void gui_start() {
     wm.invalidate_all();
     cinux::lib::kprintf("[GUI] desktop composited; refresh driven by gui_worker pump loop.\n");
 
-    // Initialise the cgui Host ABI adapter (F13 §3b/§4c): fills the host table
+    // Initialise the cinux::gui Host ABI adapter (F13 §3b/§4c): fills the host table
     // that the gui_worker's pump() drives. The callbacks forward to the
     // facilities wired above; flush forwards dirty rects to the framebuffer.
     cinux_host_init(g_screen != nullptr ? g_screen->framebuffer() : nullptr);

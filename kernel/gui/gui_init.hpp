@@ -47,7 +47,7 @@ void gui_start();
  *
  * Creates a centred Terminal window, wires per-terminal stdin/stdout pipes,
  * forks a shell child task running /bin/sh, and adds the window to the WM.
- * Used by the cgui host desktop->spawn callback (cgui §3b adapter).
+ * Used by the cinux::gui host desktop->spawn callback (cinux::gui §3b adapter).
  */
 void create_shell_terminal();
 

@@ -1,17 +1,17 @@
 /**
- * @file kernel/gui/cgui_host_cinux.cpp
- * @brief Cinux host adapter -- fills cgui_host for the in-kernel desktop
+ * @file kernel/gui/host_cinux.cpp
+ * @brief Cinux host adapter -- fills Host for the in-kernel desktop
  *
- * See cgui_host_cinux.hpp. Every callback forwards to an existing in-tree
+ * See host_cinux.hpp. Every callback forwards to an existing in-tree
  * facility; no new behaviour is introduced. The poll_event callback is the
  * only non-trivial one: it dequeues a cinux::gui::Event from the unified mouse
- * queue and serialises it into a cgui_event_header + typed payload so the
+ * queue and serialises it into a EventHeader + typed payload so the
  * (host-agnostic) pump body can consume it.
  *
  * Compile condition: CINUX_GUI.
  */
 
-#include "cgui_host_cinux.hpp"
+#include "host_cinux.hpp"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -26,23 +26,23 @@
 #include "kernel/lib/kprintf.hpp"         // kvprintf / kprintf
 #include "kernel/lib/string.hpp"          // memcpy
 #include "kernel/mm/slab.hpp"             // kmalloc / kfree
-#include "cgui/core/cgui_event.h"
-#include "cgui/core/cgui_event_payload.h"
-#include "cgui/core/cgui_region.hpp"  // cinux::gui::Region (dirty rects -> cgui_rect)
+#include "third_party/Cinux-GUI/core/event.hpp"
+#include "third_party/Cinux-GUI/core/event_payload.hpp"
+#include "third_party/Cinux-GUI/core/region.hpp"  // cinux::gui::Region (dirty rects -> Rect)
 
 namespace cinux::gui {
 namespace {
 
-cgui_host_desktop           g_cinux_desktop{};
-cgui_host                   g_cinux_host{};
+HostDesktop           g_cinux_desktop{};
+Host                   g_cinux_host{};
 cinux::drivers::Framebuffer* g_fb = nullptr; /* flush forwards dirty rects here (§4c) */
 
 /* ============================================================
- * L2 Input: dequeue one cinux::gui::Event and serialise it to a cgui event.
+ * L2 Input: dequeue one cinux::gui::Event and serialise it to a cinux::gui event.
  * ============================================================ */
-bool cinux_poll_event(void* ctx, cgui_event_header* out, uint16_t out_cap) {
+bool cinux_poll_event(void* ctx, EventHeader* out, uint16_t out_cap) {
     (void)ctx;
-    if (out == nullptr || out_cap < sizeof(cgui_event_header)) {
+    if (out == nullptr || out_cap < sizeof(EventHeader)) {
         return false;
     }
 
@@ -51,25 +51,25 @@ bool cinux_poll_event(void* ctx, cgui_event_header* out, uint16_t out_cap) {
         return false;
     }
 
-    out->magic   = CGUI_EVENT_MAGIC;
-    out->version = CGUI_ABI_VERSION;
+    out->magic   = kEventMagic;
+    out->version = kAbiVersion;
     out->flags   = 0;
 
-    uint8_t* tail  = reinterpret_cast<uint8_t*>(out) + sizeof(cgui_event_header);
-    uint16_t avail = static_cast<uint16_t>(out_cap - sizeof(cgui_event_header));
+    uint8_t* tail  = reinterpret_cast<uint8_t*>(out) + sizeof(EventHeader);
+    uint16_t avail = static_cast<uint16_t>(out_cap - sizeof(EventHeader));
 
     switch (ev.type_) {
     case EventType::MouseMove:
     case EventType::MouseDown:
     case EventType::MouseUp: {
-        if (avail < sizeof(cgui_pointer_payload)) {
+        if (avail < sizeof(PointerPayload)) {
             return false;
         }
-        out->type = CGUI_EVENT_POINTER;
-        cgui_pointer_payload p;
-        p.kind    = (ev.type_ == EventType::MouseDown) ? CGUI_POINTER_KIND_DOWN
-                    : (ev.type_ == EventType::MouseUp) ? CGUI_POINTER_KIND_UP
-                                                       : CGUI_POINTER_KIND_MOVE;
+        out->type = EventCode::kPointer;
+        PointerPayload p;
+        p.kind    = (ev.type_ == EventType::MouseDown) ? kPointerKindDown
+                    : (ev.type_ == EventType::MouseUp) ? kPointerKindUp
+                                                       : kPointerKindMove;
         p.x       = ev.mouse.x;
         p.y       = ev.mouse.y;
         p.dx      = ev.mouse.dx;
@@ -81,21 +81,21 @@ bool cinux_poll_event(void* ctx, cgui_event_header* out, uint16_t out_cap) {
     }
     case EventType::KeyDown:
     case EventType::KeyUp: {
-        if (avail < sizeof(cgui_keycode_payload)) {
+        if (avail < sizeof(KeycodePayload)) {
             return false;
         }
-        out->type  = CGUI_EVENT_KEYCODE;
+        out->type  = EventCode::kKeycode;
         /* Derive press/release from the dispatch type_ (not ev.key.pressed) so the
          * switch that accepted this event and the PRESSED flag the deserialiser
          * reads are authoritative from one source -- the two can never diverge
          * even if a producer ever lets type_ and key.pressed disagree. */
-        out->flags = (ev.type_ == EventType::KeyDown) ? CGUI_EVENT_FLAG_PRESSED : 0;
-        cgui_keycode_payload k;
+        out->flags = (ev.type_ == EventType::KeyDown) ? kEventFlagPressed : 0;
+        KeycodePayload k;
         k.ascii     = ev.key.ascii;
         k.scancode  = ev.key.scancode;
-        k.modifiers = static_cast<uint8_t>((ev.key.shift ? CGUI_KEYMOD_SHIFT : 0u) |
-                                           (ev.key.ctrl ? CGUI_KEYMOD_CTRL : 0u) |
-                                           (ev.key.alt ? CGUI_KEYMOD_ALT : 0u));
+        k.modifiers = static_cast<uint8_t>((ev.key.shift ? kKeymodShift : 0u) |
+                                           (ev.key.ctrl ? kKeymodCtrl : 0u) |
+                                           (ev.key.alt ? kKeymodAlt : 0u));
         memcpy(tail, &k, sizeof(k));
         out->payload_len = static_cast<uint16_t>(sizeof(k));
         break;
@@ -112,18 +112,18 @@ bool cinux_poll_event(void* ctx, cgui_event_header* out, uint16_t out_cap) {
 /* ============================================================
  * L4 Frame work: the host side of the host-neutral pump.
  *
- * dispatch_event: deserialise a cgui event (the pump drained it via
+ * dispatch_event: deserialise a cinux::gui event (the pump drained it via
  * poll_event) back into a cinux::gui::Event and apply it to the window
  * manager. This is the other half of the poll_event serialiser -- together
- * they exercise the cgui_event ABI so the same pump body is host-neutral.
+ * they exercise the event ABI so the same pump body is host-neutral.
  * render_frame: do all per-frame cinux work (deferred icon spawn, terminal
  * poll, cursor footprint, composite) and report the dirty rects + the staging
  * back buffer. count==0 = idle (nothing changed, the pump flushes nothing).
  * ============================================================ */
-void cinux_dispatch_event(void* ctx, const cgui_event_header* ev, const void* payload) {
+void cinux_dispatch_event(void* ctx, const EventHeader* ev, const void* payload) {
     (void)ctx;
-    if (ev == nullptr || payload == nullptr || ev->magic != CGUI_EVENT_MAGIC ||
-        ev->version != CGUI_ABI_VERSION) {
+    if (ev == nullptr || payload == nullptr || ev->magic != kEventMagic ||
+        ev->version != kAbiVersion) {
         return;
     }
 
@@ -132,20 +132,20 @@ void cinux_dispatch_event(void* ctx, const cgui_event_header* ev, const void* pa
     cinux::gui::Event out;
 
     switch (ev->type) {
-    case CGUI_EVENT_POINTER: {
-        if (ev->payload_len < sizeof(cgui_pointer_payload)) {
+    case EventCode::kPointer: {
+        if (ev->payload_len < sizeof(PointerPayload)) {
             return;
         }
-        cgui_pointer_payload p;
+        PointerPayload p;
         memcpy(&p, tail, sizeof(p));
         switch (p.kind) {
-        case CGUI_POINTER_KIND_MOVE:
+        case kPointerKindMove:
             out.type_ = EventType::MouseMove;
             break;
-        case CGUI_POINTER_KIND_DOWN:
+        case kPointerKindDown:
             out.type_ = EventType::MouseDown;
             break;
-        case CGUI_POINTER_KIND_UP:
+        case kPointerKindUp:
             out.type_ = EventType::MouseUp;
             break;
         default:
@@ -162,20 +162,20 @@ void cinux_dispatch_event(void* ctx, const cgui_event_header* ev, const void* pa
         wm.handle_mouse(out);
         return;
     }
-    case CGUI_EVENT_KEYCODE: {
-        if (ev->payload_len < sizeof(cgui_keycode_payload)) {
+    case EventCode::kKeycode: {
+        if (ev->payload_len < sizeof(KeycodePayload)) {
             return;
         }
-        cgui_keycode_payload k;
+        KeycodePayload k;
         memcpy(&k, tail, sizeof(k));
-        const bool pressed = (ev->flags & CGUI_EVENT_FLAG_PRESSED) != 0;
+        const bool pressed = (ev->flags & kEventFlagPressed) != 0;
         out.type_          = pressed ? EventType::KeyDown : EventType::KeyUp;
         out.key.ascii      = k.ascii;
         out.key.scancode   = k.scancode;
         out.key.pressed    = pressed;
-        out.key.shift      = (k.modifiers & CGUI_KEYMOD_SHIFT) != 0;
-        out.key.ctrl       = (k.modifiers & CGUI_KEYMOD_CTRL) != 0;
-        out.key.alt        = (k.modifiers & CGUI_KEYMOD_ALT) != 0;
+        out.key.shift      = (k.modifiers & kKeymodShift) != 0;
+        out.key.ctrl       = (k.modifiers & kKeymodCtrl) != 0;
+        out.key.alt        = (k.modifiers & kKeymodAlt) != 0;
         wm.handle_key(out);
         return;
     }
@@ -184,7 +184,7 @@ void cinux_dispatch_event(void* ctx, const cgui_event_header* ev, const void* pa
     }
 }
 
-void cinux_render_frame(void* ctx, cgui_frame* frame) {
+void cinux_render_frame(void* ctx, Frame* frame) {
     (void)ctx;
     if (frame == nullptr) {
         return;
@@ -238,12 +238,12 @@ void cinux_render_frame(void* ctx, cgui_frame* frame) {
     uint32_t             n     = dirty.count();
     if (n > frame->max_rects) {
         const cinux::gui::Rect b = dirty.bounds();
-        frame->rects[0]     = cgui_rect{b.x0, b.y0, b.x1, b.y1};
+        frame->rects[0]     = Rect{b.x0, b.y0, b.x1, b.y1};
         n                   = 1;
     } else {
         for (uint32_t i = 0; i < n; i++) {
             const cinux::gui::Rect& r = dirty.rects()[i];
-            frame->rects[i]      = cgui_rect{r.x0, r.y0, r.x1, r.y1};
+            frame->rects[i]      = Rect{r.x0, r.y0, r.x1, r.y1};
         }
     }
     frame->count  = n;
@@ -251,7 +251,7 @@ void cinux_render_frame(void* ctx, cgui_frame* frame) {
     frame->stride = screen->pitch();
     frame->width  = screen->width();
     frame->height = screen->height();
-    frame->format = CGUI_PIX_XRGB8888;
+    frame->format = PixelFormat::kXrgb8888;
 
     wm.clear_dirty();
 }
@@ -284,7 +284,7 @@ __attribute__((format(printf, 2, 3))) void cinux_log(void* ctx, const char* fmt,
 /* ============================================================
  * L1 Display: flush a dirty rect from the staging buffer to the framebuffer.
  *
- * §4c: the cgui pump renders into the screen canvas's back buffer (the
+ * §4c: the cinux::gui pump renders into the screen canvas's back buffer (the
  * staging Surface) and pushes only the dirty rects through this callback.
  * @p pixels is the staging buffer base; the rect at display coords (x,y,w,h)
  * lives at row offset y*stride + x*4 within it. We copy each row into the VBE
@@ -294,12 +294,12 @@ __attribute__((format(printf, 2, 3))) void cinux_log(void* ctx, const char* fmt,
  * path now runs through the Host ABI (host-agnostic).
  * ============================================================ */
 void cinux_flush(void* ctx, int x, int y, int w, int h, const void* pixels, uint32_t stride,
-                 cgui_pixel_format fmt) {
+                 PixelFormat fmt) {
     (void)ctx;
     if (g_fb == nullptr || pixels == nullptr || w <= 0 || h <= 0) {
         return;
     }
-    if (fmt != CGUI_PIX_XRGB8888) {
+    if (fmt != PixelFormat::kXrgb8888) {
         return; /* Desktop framebuffer is 32bpp XRGB; other formats arrive later */
     }
 
@@ -346,7 +346,7 @@ void cinux_flush(void* ctx, int x, int y, int w, int h, const void* pixels, uint
  * accepted for ABI completeness but ignored -- a generic spawn(path, argv)
  * returning real stdio handles is §4+ work. Today there is exactly one
  * desktop action (open a shell), and create_shell_terminal() does exactly
- * that, so behaviour matches the non-cgui gui_pump() path.
+ * that, so behaviour matches the non-cinux::gui gui_pump() path.
  * ============================================================ */
 int cinux_spawn(void* ctx, const char* path, char* const argv[], int* stdin_fd, int* stdout_fd) {
     (void)ctx;
@@ -364,7 +364,7 @@ int cinux_spawn(void* ctx, const char* path, char* const argv[], int* stdin_fd, 
 
 }  // namespace
 
-cgui_host& cinux_host() {
+Host& cinux_host() {
     return g_cinux_host;
 }
 
@@ -375,10 +375,7 @@ void cinux_host_init(cinux::drivers::Framebuffer* fb) {
     g_cinux_host.core.render_frame     = cinux_render_frame;
     g_cinux_host.core.flush            = cinux_flush;
     g_cinux_host.core.flush_complete   = nullptr; /* Desktop uses sync flush */
-    g_cinux_host.core.enter_sleep      = nullptr; /* MCU-only (display off) */
-    g_cinux_host.core.exit_sleep       = nullptr;
     g_cinux_host.core.now_ms           = cinux_now_ms;
-    g_cinux_host.core.next_deadline_ms = nullptr; /* MCU __WFI throttling only */
     g_cinux_host.core.alloc            = cinux_alloc;
     g_cinux_host.core.free             = cinux_free;
     g_cinux_host.core.log              = cinux_log;
@@ -387,7 +384,7 @@ void cinux_host_init(cinux::drivers::Framebuffer* fb) {
     g_cinux_host.desktop  = &g_cinux_desktop;
     g_cinux_host.ctx      = nullptr;
 
-    cinux::lib::kprintf("[cgui] Cinux host ABI adapter initialised\n");
+    cinux::lib::kprintf("[gui] Cinux host ABI adapter initialised\n");
 }
 
 }  // namespace cinux::gui

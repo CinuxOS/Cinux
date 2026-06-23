@@ -20,8 +20,8 @@
 
 #ifdef CINUX_GUI
 #    include "kernel/gui/gui_init.hpp"
-#    include "kernel/gui/cgui_host_cinux.hpp"
-#    include "cgui/core/cgui_pump.hpp"
+#    include "kernel/gui/host_cinux.hpp"
+#    include "third_party/Cinux-GUI/core/pump.hpp"
 #endif
 
 namespace cinux::proc {
@@ -32,7 +32,7 @@ namespace {
 void gui_worker_thread() {
     cinux::lib::kprintf("[GUI] Worker thread started\n");
     while (true) {
-        // Drive the desktop through the cgui Host ABI table (F13 §3b): input,
+        // Drive the desktop through the cinux::gui Host ABI table (F13 §3b): input,
         // time and spawn all go via host->core.* / host->desktop->*. The same
         // pump body runs unchanged on a different host fill.
         cinux::gui::pump(&cinux::gui::cinux_host());

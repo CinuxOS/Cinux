@@ -26,7 +26,7 @@
 #include "kernel/drivers/canvas.hpp"
 #include "kernel/gui/desktop_icon.hpp"
 #include "kernel/gui/event.hpp"
-#include "cgui/core/cgui_region.hpp"
+#include "third_party/Cinux-GUI/core/region.hpp"
 #include "kernel/gui/window.hpp"
 
 namespace cinux::gui {
@@ -195,7 +195,7 @@ public:
      *
      * Clears the back buffer with the desktop colour, draws the desktop icons,
      * blits each window from lowest Z-order to highest, then draws the mouse
-     * cursor. This renders the frame but does NOT present it: the cgui pump
+     * cursor. This renders the frame but does NOT present it: the cinux::gui pump
      * (F13 §4c) flushes the dirty region to the host afterwards. Previously
      * this called Canvas::flip() (full-frame copy); the display now goes
      * through the Host ABI flush so behaviour is identical but the path is
