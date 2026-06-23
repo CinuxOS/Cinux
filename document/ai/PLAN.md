@@ -23,8 +23,8 @@
 > | 批 | 范围 | Commit | 测试 |
 > |----|------|--------|------|
 > | 0A | MSI-X 能力发现（纯 reader 注入）+ host 单测 | 2714846 | run-kernel-test 928/0 + test_msix 11 例 |
-> | 0B | MSI-X Table/PBA MMIO 映射 + 条目编程 + 使能 | (本次) | run-kernel-test 928/0 + test_msix 17 例 |
-> | 0C | 向量安装 helper + ISR/handler 注册 | ⏳ | |
+> | 0B | MSI-X Table/PBA MMIO 映射 + 条目编程 + 使能 | a1be57e | run-kernel-test 928/0 + test_msix 17 例 |
+> | 0C | 向量安装 helper + ISR/handler 注册 | (本次) | run-kernel-test 928/0(向量注册,触发留 2C) |
 > | 1A | PCI find_xhci | ⏳ | |
 > | 1B | xHCI 寄存器布局头 | ⏳ | |
 > | 1C | 控制器 init（使能/MMIO/handoff/reset） | ⏳ | |

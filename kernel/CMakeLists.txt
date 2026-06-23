@@ -108,6 +108,13 @@ if(CINUX_GUI)
     add_subdirectory(gui)
 endif()
 
+# F5-M5 USB (xHCI + MSI-X): compile definition so #ifdef CINUX_USB guards in
+# kernel code (e.g. irq_handlers.cpp's default xhci_irq_handler) match the
+# CMake file gate in drivers/CMakeLists.txt.
+if(CINUX_USB)
+    target_compile_definitions(big_kernel_common PUBLIC CINUX_USB)
+endif()
+
 # F-INFRA I-10: opt-in lockdep checks (assert no spinlock held across schedule()).
 if(CINUX_LOCKDEP)
     target_compile_definitions(big_kernel_common PUBLIC CINUX_LOCKDEP)

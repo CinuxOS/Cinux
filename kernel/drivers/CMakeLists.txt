@@ -31,5 +31,6 @@ if(CINUX_USB)
     target_sources(big_kernel_common PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/pci/msix.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/pci/msix_controller.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/usb/xhci_irq.cpp
     )
 endif()
