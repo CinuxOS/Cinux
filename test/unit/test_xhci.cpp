@@ -16,6 +16,7 @@
 
 #    include <cstdint>
 
+#    include "drivers/usb/xhci_context.hpp"
 #    include "drivers/usb/xhci_registers.hpp"
 #    include "drivers/usb/xhci_ring.hpp"
 
@@ -139,6 +140,80 @@ TEST("xhci: EventRing flips CCS when the dequeue pointer wraps") {
     // New lap: controller writes [0] with cycle 0 (matches new CCS).
     storage[0].control = trb_control(TrbType::kTransferEvent);  // cycle 0
     ASSERT_TRUE(ring.dequeue(ev));
+}
+
+// ============================================================
+// 5. xHCI context field encoders (Batch 3A) -- verified bit positions
+// ============================================================
+
+TEST("xhci: SlotContext / EndpointContext / InputControlContext are 32 bytes") {
+    ASSERT_EQ(sizeof(SlotContext), 32u);
+    ASSERT_EQ(sizeof(EndpointContext), 32u);
+    ASSERT_EQ(sizeof(InputControlContext), 32u);
+}
+
+TEST("xhci: slot_dev_info packs route[19:0], speed[23:20], last_ctx[31:27]") {
+    // route=0x12345, speed=high(3), last_ctx=1 (EP0-only device)
+    const uint32_t v = slot_dev_info(0x12345, UsbSpeed::kHigh, 1);
+    ASSERT_EQ(v & 0xFFFFF, 0x12345u);  // route
+    ASSERT_EQ((v >> 20) & 0xF, 3u);    // speed
+    ASSERT_EQ(v >> 27, 1u);            // last_ctx
+    ASSERT_FALSE(v & (1U << 25));      // MTT clear
+    ASSERT_FALSE(v & (1U << 26));      // Hub clear
+}
+
+TEST("xhci: slot_dev_info sets MTT/Hub bits") {
+    const uint32_t v = slot_dev_info(0, UsbSpeed::kHigh, 1, true, true);
+    ASSERT_TRUE(v & (1U << 25));  // MTT
+    ASSERT_TRUE(v & (1U << 26));  // Hub
+}
+
+TEST("xhci: slot_dev_info2 packs max_exit[15:0], rh_port[23:16], max_ports[31:24]") {
+    const uint32_t v = slot_dev_info2(0x1024, 5, 8);
+    ASSERT_EQ(v & 0xFFFF, 0x1024u);
+    ASSERT_EQ((v >> 16) & 0xFF, 5u);
+    ASSERT_EQ((v >> 24) & 0xFF, 8u);
+}
+
+TEST("xhci: slot_dev_state packs dev_addr[7:0], slot_state[31:27]") {
+    const uint32_t v = slot_dev_state(0x2A, SlotState::kAddressed);
+    ASSERT_EQ(v & 0xFF, 0x2Au);
+    ASSERT_EQ(v >> 27, 2u);  // addressed
+}
+
+TEST("xhci: ep_info2 packs cerr[2:1], ep_type[6:3], max_packet[31:16]") {
+    // control EP (4), max packet 64, cerr default 3
+    const uint32_t v = ep_info2(EpType::kControl, 64);
+    ASSERT_EQ((v >> 1) & 0x3, 3u);  // cerr
+    ASSERT_EQ((v >> 3) & 0x7, 4u);  // ep_type = control
+    ASSERT_EQ(v >> 16, 64u);        // max_packet
+}
+
+TEST("xhci: ep_info packs ep_state[2:0] and interval[23:16]") {
+    const uint32_t v = ep_info(EpState::kRunning, 0x0A);
+    ASSERT_EQ(v & 0x7, 1u);  // running
+    ASSERT_EQ((v >> 16) & 0xFF, 0xAu);
+}
+
+TEST("xhci: ep_dequeue_ptr keeps phys in [63:4] and sets DCS bit 0") {
+    const uint64_t v = ep_dequeue_ptr(0x1000, true);
+    ASSERT_EQ(v >> 4, 0x100ULL);  // phys / 16
+    ASSERT_EQ(v & 1ULL, 1ULL);    // DCS
+    // unaligned low nibble is masked off, DCS still set
+    ASSERT_EQ(ep_dequeue_ptr(0x1003, true) >> 4, 0x100ULL);
+    ASSERT_EQ(ep_dequeue_ptr(0x1000, false) & 1ULL, 0ULL);  // dcs=false clears bit 0
+}
+
+TEST("xhci: ep_tx_info packs avg_trb_len[15:0], max_esit_payload[31:16]") {
+    const uint32_t v = ep_tx_info(0x1234, 0x00FF);
+    ASSERT_EQ(v & 0xFFFF, 0x1234u);
+    ASSERT_EQ(v >> 16, 0xFFu);
+}
+
+TEST("xhci: input_add_flag sets context-index bit (slot=bit0, EP0=bit1)") {
+    ASSERT_EQ(input_add_flag(0), 1u);  // slot
+    ASSERT_EQ(input_add_flag(1), 2u);  // EP0
+    ASSERT_EQ(input_add_flag(3), 8u);  // EP1-in
 }
 
 int main() {
