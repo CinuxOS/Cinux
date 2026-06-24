@@ -19,15 +19,8 @@
 
 namespace cinux::drivers::usb {
 
-// ============================================================
-// USB transfer type (endpoint bmAttributes [1:0])
-// ============================================================
-namespace UsbXfer {
-constexpr uint8_t kControl     = 0;
-constexpr uint8_t kIsochronous = 1;
-constexpr uint8_t kBulk        = 2;
-constexpr uint8_t kInterrupt   = 3;
-}  // namespace UsbXfer
+// UsbXfer (transfer type) now lives in usb_descriptor.hpp -- shared with
+// drivers/keyboard/hid.hpp without a cross-include.
 
 // ============================================================
 // HID boot mouse report decode

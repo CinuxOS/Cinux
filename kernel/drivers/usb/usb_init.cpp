@@ -1,12 +1,12 @@
 /**
  * @file kernel/drivers/usb/usb_init.cpp
- * @brief Boot USB bring-up: discover xHCI, enumerate the HID boot mouse, arm async input
+ * @brief Boot USB bring-up: discover xHCI, enumerate HID boot mouse + keyboard
  *
- * Batch 5A.  The enumeration sequence mirrors kernel/test/test_xhci.cpp's
- * test_hid_mouse (port scan -> reset -> Enable Slot -> Address Device ->
- * GET_DESCRIPTOR(Configuration) -> find_boot_mouse -> Configure Endpoint),
- * but targets the production async input path: after SET_PROTOCOL + Configure
- * Endpoint the mouse registers as a TransferListener and submits its first
+ * Batch 5A wired the mouse; 5B adds the keyboard.  The enumeration sequence
+ * mirrors kernel/test/test_xhci.cpp (port scan -> reset -> Enable Slot ->
+ * Address Device -> GET_DESCRIPTOR(Configuration) -> find_boot_mouse /
+ * find_boot_keyboard -> Configure Endpoint), but targets the production async
+ * input path: each device registers as a TransferListener and arms its first
  * async interrupt-IN transfer.  From then on input is interrupt-driven.
  *
  * Namespace: cinux::drivers::usb
@@ -16,6 +16,8 @@
 
 #include <stdint.h>
 
+#include "kernel/drivers/keyboard/keyboard.hpp"
+#include "kernel/drivers/keyboard/usb_keyboard.hpp"
 #include "kernel/drivers/mouse/mouse.hpp"
 #include "kernel/drivers/mouse/usb_mouse.hpp"
 #include "kernel/drivers/pci/pci.hpp"
@@ -24,18 +26,60 @@
 #include "kernel/drivers/usb/xhci_slot.hpp"
 #include "kernel/lib/kprintf.hpp"
 
+// Boot-device HID descriptor walks (find_boot_mouse / find_boot_keyboard) +
+// their endpoint structs live in the per-subsystem hid.hpp headers.
+#include "kernel/drivers/keyboard/hid.hpp"
+#include "kernel/drivers/mouse/hid.hpp"
+
 namespace cinux::drivers::usb {
 
-// Persistent storage for the controller + the enumerated mouse.  These must
-// outlive boot: the controller's rings/contexts and the slot's DMA buffers stay
-// live for the system lifetime, and the mouse is a TransferListener the ISR
-// calls on every report.  (Batch 5A wires the mouse only; a keyboard + its own
-// slot arrive in 5B, reusing the same async + listener mechanism.)
+// Persistent storage for the controller + the enumerated devices.  These must
+// outlive boot: the controller's rings/contexts and each slot's DMA buffers
+// stay live for the system lifetime, and the mouse/keyboard are TransferListeners
+// the ISR calls on every report.  One XhciSlot per device (mouse + keyboard).
 namespace {
-XHCIController           g_xhci;
-XhciSlot                 g_mouse_slot;
-cinux::drivers::UsbMouse g_mouse;
+XHCIController              g_xhci;
+XhciSlot                    g_slots[2];  ///< one per enumerated boot device
+cinux::drivers::UsbMouse    g_mouse;
+cinux::drivers::UsbKeyboard g_keyboard;
 }  // namespace
+
+/// Enumerate the device on @p port: reset, Enable Slot, Address Device, read the
+/// config descriptor.  Fills @p slot (bound to slot_id) on success and returns
+/// the descriptor length; returns 0 on any failure (caller tries the next port).
+static uint32_t enumerate_port(uint8_t port, XhciSlot& slot) {
+    if (!(g_xhci.read_portsc(port) & Portsc::kCurrentConnect)) {
+        return 0;
+    }
+    auto speed_r = g_xhci.port_reset(port);
+    if (!speed_r.ok()) {
+        return 0;
+    }
+    auto es = g_xhci.run_command(0, 0, trb_control(TrbType::kEnableSlot));
+    if (!es.ok()) {
+        return 0;
+    }
+    const uint8_t slot_id = static_cast<uint8_t>(cmd_completion_slot_id(es.value().control));
+    if (!slot.allocate(slot_id).ok()) {
+        return 0;
+    }
+    g_xhci.dcbaa_set(slot_id, slot.device_context_phys());
+
+    const uint32_t speed = speed_r.value();
+    const uint32_t maxp  = (speed == UsbSpeed::kHigh) ? 64 : 8;
+    slot.build_address_input(speed, port + 1, maxp);
+    auto ad = g_xhci.run_command(slot.input_context_phys(), 0,
+                                 trb_control(TrbType::kAddressDevice) | slot_id_for_trb(slot_id));
+    if (!ad.ok() || cmd_completion_code(ad.value().status) != CompCode::kSuccess) {
+        return 0;
+    }
+
+    auto cfg = slot.get_descriptor(g_xhci, UsbDescType::kConfiguration, 0, 255);
+    if (!cfg.ok()) {
+        return 0;
+    }
+    return cfg.value();
+}
 
 void init() {
     pci::PCI       pci;
@@ -51,63 +95,60 @@ void init() {
     }
     XHCIController::set_instance(&g_xhci);
 
-    // Scan ports; enumerate the first HID boot mouse.
-    for (uint8_t port = 0; port < g_xhci.max_ports(); ++port) {
-        if (!(g_xhci.read_portsc(port) & Portsc::kCurrentConnect)) {
-            continue;
-        }
-        auto speed_r = g_xhci.port_reset(port);
-        if (!speed_r.ok()) {
-            continue;
-        }
-        auto es = g_xhci.run_command(0, 0, trb_control(TrbType::kEnableSlot));
-        if (!es.ok()) {
-            continue;
-        }
-        const uint8_t slot_id = static_cast<uint8_t>(cmd_completion_slot_id(es.value().control));
-        if (!g_mouse_slot.allocate(slot_id).ok()) {
-            continue;
-        }
-        g_xhci.dcbaa_set(slot_id, g_mouse_slot.device_context_phys());
+    bool     mouse_ok = false;
+    bool     kbd_ok   = false;
+    uint32_t slot_idx = 0;  // next free slot object (mouse + keyboard = 2)
 
-        const uint32_t speed = speed_r.value();
-        const uint32_t maxp  = (speed == UsbSpeed::kHigh) ? 64 : 8;
-        g_mouse_slot.build_address_input(speed, port + 1, maxp);
-        auto ad =
-            g_xhci.run_command(g_mouse_slot.input_context_phys(), 0,
-                               trb_control(TrbType::kAddressDevice) | slot_id_for_trb(slot_id));
-        if (!ad.ok() || cmd_completion_code(ad.value().status) != CompCode::kSuccess) {
-            continue;
+    for (uint8_t port = 0; port < g_xhci.max_ports() && slot_idx < 2; ++port) {
+        XhciSlot&      slot    = g_slots[slot_idx];
+        const uint32_t cfg_len = enumerate_port(port, slot);
+        if (cfg_len == 0) {
+            continue;  // not connected / not addressable / no descriptor
         }
+        const uint8_t* desc = slot.data_virt();
 
-        auto cfg = g_mouse_slot.get_descriptor(g_xhci, UsbDescType::kConfiguration, 0, 255);
-        if (!cfg.ok()) {
-            continue;
+        BootMouseEp    mep{};
+        BootKeyboardEp kep{};
+        if (!mouse_ok && find_boot_mouse(desc, cfg_len, mep)) {
+            if (!slot.set_configuration(g_xhci, 1).ok()) {
+                continue;
+            }
+            g_mouse.bind(slot);
+            g_xhci.register_transfer_listener(slot.slot_id(), &g_mouse);
+            if (!g_mouse.init(g_xhci, mep).ok()) {
+                cinux::lib::kprintf("[xHCI] HID boot mouse init failed (port=%u)\n", port);
+                continue;
+            }
+            g_mouse.arm();
+            cinux::drivers::Mouse::set_usb_primary(true);
+            mouse_ok = true;
+            ++slot_idx;
+            cinux::lib::kprintf("[xHCI] HID boot mouse armed: port=%u ep%u-IN (async)\n", port,
+                                mep.ep_number);
+        } else if (!kbd_ok && find_boot_keyboard(desc, cfg_len, kep)) {
+            if (!slot.set_configuration(g_xhci, 1).ok()) {
+                continue;
+            }
+            g_keyboard.bind(slot);
+            g_xhci.register_transfer_listener(slot.slot_id(), &g_keyboard);
+            if (!g_keyboard.init(g_xhci, kep).ok()) {
+                cinux::lib::kprintf("[xHCI] HID boot keyboard init failed (port=%u)\n", port);
+                continue;
+            }
+            g_keyboard.arm();
+            cinux::drivers::Keyboard::set_usb_primary(true);
+            kbd_ok = true;
+            ++slot_idx;
+            cinux::lib::kprintf("[xHCI] HID boot keyboard armed: port=%u ep%u-IN (async)\n", port,
+                                kep.ep_number);
         }
-        BootMouseEp mep{};
-        if (!find_boot_mouse(g_mouse_slot.data_virt(), cfg.value(), mep)) {
-            continue;  // not a boot mouse (e.g. the keyboard) -- try the next port
-        }
-
-        if (!g_mouse_slot.set_configuration(g_xhci, 1).ok()) {
-            continue;
-        }
-        g_mouse.bind(g_mouse_slot);
-        // Register the listener BEFORE the first async transfer, so a report
-        // arriving the instant the transfer completes still dispatches.
-        g_xhci.register_transfer_listener(slot_id, &g_mouse);
-        if (!g_mouse.init(g_xhci, mep).ok()) {
-            cinux::lib::kprintf("[xHCI] HID boot mouse init failed (slot=%u)\n", slot_id);
-            continue;
-        }
-        g_mouse.arm();  // submit the first async IN transfer (listener already registered)
-        cinux::drivers::Mouse::set_usb_primary(true);  // PS/2 stays as silent fallback
-        cinux::lib::kprintf("[xHCI] HID boot mouse armed: slot=%u ep%u-IN (async interrupt-IN)\n",
-                            slot_id, mep.ep_number);
-        return;  // mouse armed
+        // else: not a boot mouse/keyboard, or that device class is already bound
+        // -- leave slot_idx so the next port reuses this slot object.
     }
 
-    cinux::lib::kprintf("[xHCI] no HID boot mouse found -- USB mouse disabled\n");
+    if (!mouse_ok && !kbd_ok) {
+        cinux::lib::kprintf("[xHCI] no HID boot device found -- USB input disabled\n");
+    }
 }
 
 }  // namespace cinux::drivers::usb

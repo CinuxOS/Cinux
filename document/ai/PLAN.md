@@ -35,9 +35,10 @@
 > | 3B | Address Device 状态机(端口 reset+Enable Slot+寻址) | c51065b | run-kernel-test-xhci **930/0**(address device code=1 slot_state=2 dev_addr=1,真机设备 addressed) |
 > | 3C | 控制传输(SETUP/Data/Status)+ GET_DESCRIPTOR + SET_CONFIGURATION | 48b5ff4 | run-kernel-test-xhci **930/0**(读到 usb-kbd 描述符 vid=0x627 + set_configuration ok,真控制传输端到端) |
 > | 4A | HID boot:Configure Endpoint + interrupt-in EP + SET_PROTOCOL + 报告解码 | f5a8fd5 | run-kernel-test-xhci **930/0**(configure endpoint ok 加 interrupt-IN EP;静止鼠标 NAK 无报告符合预期) |
-> | 4B | 鼠标输入分层收拢(XhciSlot 退回通用+UsbMouse 类+drivers/mouse/)+ 注入 event_queue(dy=+hid_dy)+ 输入源互斥 | (本次) | run-kernel-test-xhci **930/0**(HID mouse -> boot ok 经 UsbMouse,分层重构行为不变)+ test_host 54/54 |
-> | 5A | boot 接线 + QEMU 切换（run-kernel-test-xhci） | ⏳ | |
-> | 5B | 测试加固 + docs 同步 | ⏳ | |
+> | 4B | 鼠标输入分层收拢(XhciSlot 退回通用+UsbMouse 类+drivers/mouse/)+ 注入 event_queue(dy=+hid_dy)+ 输入源互斥 | 8ff216f | run-kernel-test-xhci **930/0**(HID mouse -> boot ok 经 UsbMouse,分层重构行为不变)+ test_host 54/54 |
+> | 5A | async interrupt-IN + TransferListener 分发 + UsbMouse listener + boot mouse 接线(usb_init.cpp) + make run 切 USB mouse | e043d89 | run-kernel-test 931/0 + run-kernel-test-xhci 931/0 + make run "HID boot mouse armed slot=1 ep1-IN" 无 panic + test_host 绿 |
+> | 5B | USB boot keyboard(hid decode/find + Keyboard inject_usb_report + UsbKeyboard + boot 接线 + make run usb-kbd) | ⏳ | |
+> | 5C | 测试加固 + ROADMAP/PLAN/todo/notes 同步 | ⏳ | |
 
 > **F1-M3 = DMA 基础设施 ✅ 完成（2026-06-16）**。
 > **F1-M4 = 块设备抽象 ✅ 完成（2026-06-16）**。

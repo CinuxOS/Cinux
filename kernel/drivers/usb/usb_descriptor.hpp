@@ -116,6 +116,19 @@ constexpr uint8_t kSetIdle           = 0x0A;
 }  // namespace UsbHid
 
 // ============================================================
+// USB transfer type (endpoint bmAttributes [1:0]) -- shared by the mouse +
+// keyboard HID descriptor walks (lives here so drivers/mouse/ and
+// drivers/keyboard/ share it without cross-including each other).
+// ============================================================
+
+namespace UsbXfer {
+constexpr uint8_t kControl     = 0;
+constexpr uint8_t kIsochronous = 1;
+constexpr uint8_t kBulk        = 2;
+constexpr uint8_t kInterrupt   = 3;
+}  // namespace UsbXfer
+
+// ============================================================
 // Endpoint address helpers
 // ============================================================
 

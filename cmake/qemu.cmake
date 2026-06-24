@@ -118,6 +118,7 @@ add_custom_target(run
     COMMAND ${QEMU_EXECUTABLE} ${QEMU_COMMON_FLAGS} ${QEMU_DEVELOP_FLAG}
         -drive file=${CINUX_IMAGE_PATH},format=raw,index=0,media=disk
         -device qemu-xhci,id=xhci
+        -device usb-kbd,bus=xhci.0
         -device usb-mouse,bus=xhci.0
         -device ahci,id=ahci
         -drive file=${AHCI_TEST_IMAGE},format=raw,if=none,id=ahci-disk
