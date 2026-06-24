@@ -20,6 +20,7 @@
 #include "kernel/drivers/pci/pci_config.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/vmm.hpp"
+#include "kernel/proc/scheduler.hpp"
 
 namespace cinux::drivers::usb {
 
@@ -43,7 +44,7 @@ constexpr uint64_t kXhciMmioVirt = cinux::arch::KMEM_MMIO_BASE + 0x20000;
 constexpr uint64_t kMmioFlags =
     cinux::arch::FLAG_PRESENT | cinux::arch::FLAG_WRITABLE | cinux::arch::FLAG_PCD;
 constexpr uint64_t kMmioPages  = 4;
-constexpr uint32_t kResetIters = 1000000;  // bounded poll cap (QEMU completes in <<100)
+constexpr uint32_t kResetIters = 100000;  // bounded poll cap (QEMU completes in <<100)
 constexpr uint64_t kPageSize   = 4096;
 
 // Ring sizes (single page each via DmaPool).
@@ -105,6 +106,9 @@ cinux::lib::ErrorOr<void> XHCIController::init(const pci::PCIDevice& dev) {
         if (op_regs_->usbsts & Usbsts::kHcHalted) {
             break;
         }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
     }
 
     op_regs_->usbcmd = Usbcmd::kHcReset;
@@ -113,6 +117,9 @@ cinux::lib::ErrorOr<void> XHCIController::init(const pci::PCIDevice& dev) {
         const uint32_t run = op_regs_->usbcmd;
         if (!(sts & Usbsts::kControllerNotReady) && !(run & Usbcmd::kHcReset)) {
             break;
+        }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
         }
     }
 
@@ -235,15 +242,22 @@ cinux::lib::ErrorOr<void> XHCIController::start() {
         if (!(op_regs_->usbsts & Usbsts::kHcHalted)) {
             break;
         }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
     }
     if (op_regs_->usbsts & Usbsts::kHcHalted) {
         cinux::lib::kprintf("[xHCI] start failed: controller did not leave HCH\n");
         return cinux::lib::Error::TimedOut;
     }
 
-    // Enable interrupter 0 after the controller is running.  Setting IE before
-    // the USBCMD.RS transition was observed to leave IE cleared (IMAN.IE == 0).
-    ir0_->iman = ir0_->iman | Iman::kEnable;
+    // Enable interrupter 0.  This is spec-correct and arms MSI-X event delivery
+    // on real hardware.  Under QEMU + nested-KVM IMAN.IE does not reliably latch,
+    // so the production event-service path polls the ring from the gui_worker
+    // (see init.cpp); the MSI-X setup is left in place for real HW / future QEMU.
+    // Drain boot-time events first so IP is clear when IE is written.
+    poll_events();
+    ir0_->iman = (ir0_->iman & ~Iman::kPending) | Iman::kEnable;
 
     cinux::lib::kprintf("[xHCI] running (MaxSlotsEn=%u, scratchpad=%u, event ring armed)\n",
                         max_slots_, spb);
@@ -258,8 +272,23 @@ void XHCIController::submit_command(uint64_t parameter, uint32_t status, uint32_
 void XHCIController::poll_events() {
     Trb ev;
     while (event_ring_.dequeue(ev)) {
-        if (trb_type(ev.control) == TrbType::kCommandCompletion) {
+        const uint32_t type = trb_type(ev.control);
+        if (type == TrbType::kCommandCompletion) {
             ++cmd_completion_count_;
+            last_cmd_completion_ = ev;  // most recent CCE (run_command matches it)
+        } else if (type == TrbType::kTransferEvent) {
+            last_transfer_event_ = ev;  // most recent Transfer Event (run_transfer)
+            // Async dispatch (Batch 5A): hand the event to the listener
+            // registered for this slot (e.g. UsbMouse/UsbKeyboard).  The
+            // controller stays a generic transport layer -- it does NOT decode
+            // the payload; the device driver does, inside on_transfer_complete.
+            // No registered listener -> the synchronous run_transfer path still
+            // matches last_transfer_event_ above.
+            const uint8_t slot   = static_cast<uint8_t>(cmd_completion_slot_id(ev.control));
+            if (slot < kListenerSlots && by_slot_[slot] != nullptr) {
+                const uint8_t epid = static_cast<uint8_t>(transfer_event_epid(ev.control));
+                by_slot_[slot]->on_transfer_complete(slot, epid, ev);
+            }
         }
     }
     // Advance ERDP to the current dequeue pointer (acknowledges processed events
@@ -272,10 +301,103 @@ void XHCIController::poll_events() {
     ir0_->iman    = ir0_->iman | Iman::kPending;
 }
 
+cinux::lib::ErrorOr<Trb> XHCIController::run_command(uint64_t parameter, uint32_t status,
+                                                     uint32_t control) {
+    // Capture the command-TRB slot we are about to fill, so we can match the
+    // Command Completion Event whose parameter echoes its physical address.
+    const uint64_t expected =
+        cmd_ring_buf_.phys() + static_cast<uint64_t>(cmd_ring_.enqueue_index()) * 16;
+    submit_command(parameter, status, control);
+    for (uint32_t i = 0; i < kResetIters; ++i) {
+        poll_events();
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();  // Batch 5A fix: yield while busy-polling so the
+                                              // scheduler can run the desktop/gui_worker
+        }
+        if (trb_type(last_cmd_completion_.control) == TrbType::kCommandCompletion &&
+            (last_cmd_completion_.parameter & 0xFFFFFFFFFFFFFFC0ULL) ==
+                (expected & 0xFFFFFFFFFFFFFFC0ULL)) {
+            return last_cmd_completion_;
+        }
+    }
+    cinux::lib::kprintf("[xHCI] run_command timed out (param=0x%lx)\n",
+                        static_cast<unsigned long>(parameter));
+    return cinux::lib::Error::TimedOut;
+}
+
+cinux::lib::ErrorOr<Trb> XHCIController::run_transfer(uint8_t slot_id, uint8_t epid) {
+    // Ring the slot's EP doorbell: target [7:0] = endpoint DCI (1 = EP0), stream 0.
+    doorbells_[slot_id] = epid;
+    for (uint32_t i = 0; i < kResetIters; ++i) {
+        poll_events();
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
+        if (trb_type(last_transfer_event_.control) == TrbType::kTransferEvent &&
+            cmd_completion_slot_id(last_transfer_event_.control) == slot_id &&
+            transfer_event_epid(last_transfer_event_.control) == epid) {
+            return last_transfer_event_;
+        }
+    }
+    cinux::lib::kprintf("[xHCI] run_transfer timed out (slot=%u epid=%u)\n",
+                        static_cast<unsigned>(slot_id), static_cast<unsigned>(epid));
+    return cinux::lib::Error::TimedOut;
+}
+
+volatile uint32_t* XHCIController::portsc(uint8_t port) {
+    return reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(op_regs_) +
+                                                PortRegs::kBaseOffset +
+                                                static_cast<uint64_t>(port) * PortRegs::kSpacing);
+}
+
+uint32_t XHCIController::read_portsc(uint8_t port) {
+    return *portsc(port);
+}
+
+cinux::lib::ErrorOr<uint32_t> XHCIController::port_reset(uint8_t port) {
+    volatile uint32_t* psc = portsc(port);
+    // Power the port (no-op on QEMU qemu-xhci: PPC=0, ports always powered;
+    // real hardware with HCC PPC needs this before reset).
+    *psc                   = *psc | Portsc::kPortPower;
+    // Assert reset; the controller clears PORT_RESET when reset completes.
+    *psc                   = *psc | Portsc::kPortReset;
+    for (uint32_t i = 0; i < kResetIters; ++i) {
+        if (!(*psc & Portsc::kPortReset)) {
+            break;
+        }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
+    }
+    if (*psc & Portsc::kPortReset) {
+        cinux::lib::kprintf("[xHCI] port %u reset did not complete (PORTSC=0x%x)\n",
+                            static_cast<unsigned>(port), *psc);
+        return cinux::lib::Error::TimedOut;
+    }
+    // Clear the change bits (write-1-to-clear) so they don't linger.
+    *psc = *psc | (Portsc::kConnectStatusChange | Portsc::kPortEnableChange |
+                   Portsc::kPortResetChange | Portsc::kPortLinkStateChange);
+    return Portsc::portsc_speed(*psc);
+}
+
+void XHCIController::dcbaa_set(uint8_t slot, uint64_t phys) {
+    static_cast<uint64_t*>(dcbaa_buf_.virt())[slot] = phys;
+}
+
 void XHCIController::event_irq_thunk() {
     if (s_instance_ != nullptr) {
         s_instance_->poll_events();
     }
+}
+
+void XHCIController::register_transfer_listener(uint8_t slot_id, TransferListener* listener) {
+    if (slot_id < kListenerSlots) {
+        by_slot_[slot_id] = listener;
+    }
+}
+
+void XHCIController::ring_doorbell(uint8_t slot_id, uint8_t epid) {
+    doorbells_[slot_id] = epid;  // target [7:0] = endpoint DCI, stream 0
 }
 
 }  // namespace cinux::drivers::usb

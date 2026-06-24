@@ -13,8 +13,6 @@
 
 #include "xhci_irq.hpp"
 
-#include "kernel/arch/x86_64/irq_backend.hpp"
-
 namespace cinux::drivers::usb {
 
 volatile uint64_t g_xhci_irq_count = 0;
@@ -36,5 +34,5 @@ extern "C" void xhci_irq_handler(cinux::arch::InterruptFrame* /*frame*/) {
     if (g_xhci_hook != nullptr) {
         g_xhci_hook();
     }
-    cinux::arch::irq_eoi(0);
+    // EOI is sent by the ISR_IRQ stub after this handler returns.
 }

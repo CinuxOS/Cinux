@@ -30,14 +30,15 @@
 > | 1C | 控制器 init（使能/MMIO/handoff/reset） | 6f3e24e | run-kernel-test-xhci **929/0**（真 xHCI reset 点亮!) |
 > | 2A | TRB + ring 数学（纯） | 558a781 | run-kernel-test 929/0 + test_xhci 11 例(含 5 ring) |
 > | 2B | DCBAA + 中断器/ERST + 启动 | 265b9c1 | run-kernel-test-xhci **929/0**(控制器 running,scratchpad=15) |
-> | 2C | 接线 MSI-X→event-ring ISR + doorbell NOOP→中断（最高风险） | (本次) | run-kernel-test-xhci **929/0**(cmd_completions=1 EINT=1,命令管线+中断路径端到通) |
-> | 3A | slot/context + 控制传输 | ⏳ | |
-> | 3B | Address Device 状态机 | ⏳ | |
-> | 3C | GET_DESCRIPTOR + SET_CONFIGURATION | ⏳ | |
-> | 4A | HID boot SET_PROTOCOL + interrupt-in + 解码 | ⏳ | |
-> | 4B | 注入事件队列 + 输入源互斥 | ⏳ | |
-> | 5A | boot 接线 + QEMU 切换（run-kernel-test-xhci） | ⏳ | |
-> | 5B | 测试加固 + docs 同步 | ⏳ | |
+> | 2C | 接线 MSI-X→event-ring ISR + doorbell NOOP→中断（最高风险） | 1b89843 | run-kernel-test-xhci **929/0**(cmd_completions=1 EINT=1,命令管线+中断路径端到通) |
+> | 3A | USB SETUP 包+描述符+xHCI context 编码器(纯层,host 测) | 9bfd7a4 | run-kernel-test **929/0** + test_host 53/53(context 位布局已 Linux xhci.h 核实) |
+> | 3B | Address Device 状态机(端口 reset+Enable Slot+寻址) | c51065b | run-kernel-test-xhci **930/0**(address device code=1 slot_state=2 dev_addr=1,真机设备 addressed) |
+> | 3C | 控制传输(SETUP/Data/Status)+ GET_DESCRIPTOR + SET_CONFIGURATION | 48b5ff4 | run-kernel-test-xhci **930/0**(读到 usb-kbd 描述符 vid=0x627 + set_configuration ok,真控制传输端到端) |
+> | 4A | HID boot:Configure Endpoint + interrupt-in EP + SET_PROTOCOL + 报告解码 | f5a8fd5 | run-kernel-test-xhci **930/0**(configure endpoint ok 加 interrupt-IN EP;静止鼠标 NAK 无报告符合预期) |
+> | 4B | 鼠标输入分层收拢(XhciSlot 退回通用+UsbMouse 类+drivers/mouse/)+ 注入 event_queue(dy=+hid_dy)+ 输入源互斥 | 8ff216f | run-kernel-test-xhci **930/0**(HID mouse -> boot ok 经 UsbMouse,分层重构行为不变)+ test_host 54/54 |
+> | 5A | async interrupt-IN + TransferListener 分发 + UsbMouse listener + boot mouse 接线(usb_init.cpp) + make run 切 USB mouse | e043d89 | run-kernel-test 931/0 + run-kernel-test-xhci 931/0 + make run "HID boot mouse armed slot=1 ep1-IN" 无 panic + test_host 绿 |
+> | 5B | USB boot keyboard(复用 async+TransferListener;keyboard/hid HID keycode→ASCII + 边沿检测 + UsbKeyboard + usb_init 双设备枚举 + make run usb-kbd) | 5238e10 | run-kernel-test 931/0 + run-kernel-test-xhci 931/0 + make run "keyboard armed port=4"+"mouse armed port=5" 无 panic + test_host 绿 |
+> | 5C | 测试加固 + ROADMAP/PLAN/todo/notes 同步(本批:ROADMAP F5-M5✅ + todo 04-xhci 标实现 + 5B notes + memory) | (本次) | docs-only |
 
 > **F1-M3 = DMA 基础设施 ✅ 完成（2026-06-16）**。
 > **F1-M4 = 块设备抽象 ✅ 完成（2026-06-16）**。
