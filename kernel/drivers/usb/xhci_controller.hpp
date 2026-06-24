@@ -51,6 +51,10 @@ class XHCIController {
 public:
     static XHCIController& instance();
     static void            set_instance(XHCIController* c);
+    /// Null-safe probe (diagnostic): true once start() installed the singleton.
+    /// Guards callers (e.g. the gui_worker diagnostic poll) that must not
+    /// dereference instance() before/when no controller is present.
+    static bool            has_controller() { return s_instance_ != nullptr; }
 
     /**
      * @brief Bring up the controller from a PCI descriptor

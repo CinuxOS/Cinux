@@ -20,6 +20,7 @@
 #include "kernel/drivers/pci/pci_config.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/mm/vmm.hpp"
+#include "kernel/proc/scheduler.hpp"
 
 namespace cinux::drivers::usb {
 
@@ -43,7 +44,7 @@ constexpr uint64_t kXhciMmioVirt = cinux::arch::KMEM_MMIO_BASE + 0x20000;
 constexpr uint64_t kMmioFlags =
     cinux::arch::FLAG_PRESENT | cinux::arch::FLAG_WRITABLE | cinux::arch::FLAG_PCD;
 constexpr uint64_t kMmioPages  = 4;
-constexpr uint32_t kResetIters = 1000000;  // bounded poll cap (QEMU completes in <<100)
+constexpr uint32_t kResetIters = 100000;  // bounded poll cap (QEMU completes in <<100)
 constexpr uint64_t kPageSize   = 4096;
 
 // Ring sizes (single page each via DmaPool).
@@ -105,6 +106,9 @@ cinux::lib::ErrorOr<void> XHCIController::init(const pci::PCIDevice& dev) {
         if (op_regs_->usbsts & Usbsts::kHcHalted) {
             break;
         }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
     }
 
     op_regs_->usbcmd = Usbcmd::kHcReset;
@@ -113,6 +117,9 @@ cinux::lib::ErrorOr<void> XHCIController::init(const pci::PCIDevice& dev) {
         const uint32_t run = op_regs_->usbcmd;
         if (!(sts & Usbsts::kControllerNotReady) && !(run & Usbcmd::kHcReset)) {
             break;
+        }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
         }
     }
 
@@ -235,15 +242,22 @@ cinux::lib::ErrorOr<void> XHCIController::start() {
         if (!(op_regs_->usbsts & Usbsts::kHcHalted)) {
             break;
         }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
     }
     if (op_regs_->usbsts & Usbsts::kHcHalted) {
         cinux::lib::kprintf("[xHCI] start failed: controller did not leave HCH\n");
         return cinux::lib::Error::TimedOut;
     }
 
-    // Enable interrupter 0 after the controller is running.  Setting IE before
-    // the USBCMD.RS transition was observed to leave IE cleared (IMAN.IE == 0).
-    ir0_->iman = ir0_->iman | Iman::kEnable;
+    // Enable interrupter 0.  This is spec-correct and arms MSI-X event delivery
+    // on real hardware.  Under QEMU + nested-KVM IMAN.IE does not reliably latch,
+    // so the production event-service path polls the ring from the gui_worker
+    // (see init.cpp); the MSI-X setup is left in place for real HW / future QEMU.
+    // Drain boot-time events first so IP is clear when IE is written.
+    poll_events();
+    ir0_->iman = (ir0_->iman & ~Iman::kPending) | Iman::kEnable;
 
     cinux::lib::kprintf("[xHCI] running (MaxSlotsEn=%u, scratchpad=%u, event ring armed)\n",
                         max_slots_, spb);
@@ -296,6 +310,10 @@ cinux::lib::ErrorOr<Trb> XHCIController::run_command(uint64_t parameter, uint32_
     submit_command(parameter, status, control);
     for (uint32_t i = 0; i < kResetIters; ++i) {
         poll_events();
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();  // Batch 5A fix: yield while busy-polling so the
+                                              // scheduler can run the desktop/gui_worker
+        }
         if (trb_type(last_cmd_completion_.control) == TrbType::kCommandCompletion &&
             (last_cmd_completion_.parameter & 0xFFFFFFFFFFFFFFC0ULL) ==
                 (expected & 0xFFFFFFFFFFFFFFC0ULL)) {
@@ -312,6 +330,9 @@ cinux::lib::ErrorOr<Trb> XHCIController::run_transfer(uint8_t slot_id, uint8_t e
     doorbells_[slot_id] = epid;
     for (uint32_t i = 0; i < kResetIters; ++i) {
         poll_events();
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
+        }
         if (trb_type(last_transfer_event_.control) == TrbType::kTransferEvent &&
             cmd_completion_slot_id(last_transfer_event_.control) == slot_id &&
             transfer_event_epid(last_transfer_event_.control) == epid) {
@@ -343,6 +364,9 @@ cinux::lib::ErrorOr<uint32_t> XHCIController::port_reset(uint8_t port) {
     for (uint32_t i = 0; i < kResetIters; ++i) {
         if (!(*psc & Portsc::kPortReset)) {
             break;
+        }
+        if (i > 0 && (i % 10000) == 0) {
+            cinux::proc::Scheduler::yield();
         }
     }
     if (*psc & Portsc::kPortReset) {

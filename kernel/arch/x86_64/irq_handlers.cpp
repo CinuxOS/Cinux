@@ -65,6 +65,22 @@ void xhci_irq_stub();        // F5-M5 Batch 0C: xHCI event-ring MSI-X (vector 0x
 }  // extern "C"
 
 // ============================================================
+// ISR-stub epilogue helpers (called from the ISR_IRQ macro in interrupts.S)
+// ============================================================
+// EOI is owned by the ISR stub (irq_eoi_isr below), NOT by individual C
+// handlers.  A handler can no longer forget the EOI or call the wrong back-end
+// (the keyboard PIC::send_eoi bug: in APIC mode the PIC EOI is a no-op, so
+// vector 0x21 stayed in the LAPIC ISR, raised the processor priority, and
+// blocked the PIT + every lower/equal-priority interrupt -- freezing the
+// whole interrupt subsystem).  irq_exit() does the deferred-preempt switch
+// the timer used to do inline, now run AFTER the stub has EOId.
+// ============================================================
+
+extern "C" void irq_eoi_isr(uint8_t irq) {
+    cinux::arch::irq_eoi(irq);
+}
+
+// ============================================================
 // IRQ routing table (constexpr, data-driven)
 // ============================================================
 
@@ -91,28 +107,28 @@ extern "C" {
 /**
  * @brief Default handler for unconfigured IRQ lines
  *
- * Simply sends EOI to the master PIC so the interrupt does not
- * stall further IRQ delivery.  Since we do not know which specific
- * IRQ fired from this shared handler, we send master-only EOI.
+ * No-op body: the ISR stub (ISR_IRQ macro) sends the EOI after the handler
+ * returns, so an unexpected IRQ is still acknowledged and cannot stall
+ * delivery.  Nothing else to do for an unconfigured line.
  *
  * @param frame  Interrupt stack frame (unused)
  */
 void irq_default_handler(InterruptFrame* /*frame*/) {
-    cinux::arch::irq_eoi(0);
+    // EOI is owned by the ISR stub.
 }
 
 #ifndef CINUX_GUI
 /**
  * @brief Default IRQ12 handler when GUI mode is disabled
  *
- * In non-GUI builds the mouse driver is not compiled, so we provide
- * a stub that simply acknowledges the interrupt.  In GUI builds the
- * real implementation lives in mouse.cpp and overrides this weak alias.
+ * In non-GUI builds the mouse driver is not compiled, so we provide this stub.
+ * In GUI builds the real implementation lives in mouse.cpp and overrides this
+ * weak alias.  EOI is sent by the ISR stub in both cases.
  *
  * @param frame  Interrupt stack frame (unused)
  */
 void mouse_irq12_handler(InterruptFrame* /*frame*/) {
-    cinux::arch::irq_eoi(12);
+    // EOI is owned by the ISR stub.
 }
 #endif
 
@@ -120,13 +136,14 @@ void mouse_irq12_handler(InterruptFrame* /*frame*/) {
 /**
  * @brief Default xHCI IRQ handler when the USB driver is not compiled
  *
- * With CINUX_USB off, usb/xhci_irq.cpp is absent, so we provide a stub that
- * just EOIs.  MSI-X is never programmed without the driver, so this handler
- * should never actually fire -- it exists only to satisfy the asm stub's link
- * reference to xhci_irq_handler.  (Mirrors the mouse #ifndef CINUX_GUI stub.)
+ * With CINUX_USB off, usb/xhci_irq.cpp is absent, so we provide this stub.
+ * MSI-X is never programmed without the driver, so this handler should never
+ * actually fire -- it exists only to satisfy the asm stub's link reference to
+ * xhci_irq_handler.  (Mirrors the mouse #ifndef CINUX_GUI stub.)  EOI is sent
+ * by the ISR stub.
  */
 extern "C" void xhci_irq_handler(InterruptFrame* /*frame*/) {
-    cinux::arch::irq_eoi(0);
+    // EOI is owned by the ISR stub.
 }
 #endif
 

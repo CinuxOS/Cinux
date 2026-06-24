@@ -115,7 +115,7 @@ add_custom_target(image ALL
 )
 
 add_custom_target(run
-    COMMAND ${QEMU_EXECUTABLE} ${QEMU_COMMON_FLAGS} ${QEMU_DEVELOP_FLAG}
+    COMMAND ${QEMU_EXECUTABLE} ${QEMU_COMMON_FLAGS} -smp 2 ${QEMU_DEVELOP_FLAG}
         -drive file=${CINUX_IMAGE_PATH},format=raw,index=0,media=disk
         -device qemu-xhci,id=xhci
         -device usb-kbd,bus=xhci.0

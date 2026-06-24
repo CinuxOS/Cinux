@@ -12,7 +12,6 @@
 #include <stdint.h>
 
 #include "kernel/arch/x86_64/io.hpp"
-#include "kernel/arch/x86_64/irq_backend.hpp"
 #include "kernel/arch/x86_64/pic.hpp"
 #include "kernel/lib/kprintf.hpp"
 
@@ -191,8 +190,7 @@ void Mouse::irq12_handler(cinux::arch::InterruptFrame* /*frame*/) {
     // Process the byte (assembles 3-byte packets internally)
     process_byte(byte);
 
-    // Signal End-Of-Interrupt for IRQ12 (slave PIC, cascaded on IRQ2)
-    cinux::arch::irq_eoi(12);
+    // EOI is sent by the ISR_IRQ stub after this handler returns.
 }
 
 // ============================================================

@@ -71,9 +71,11 @@ cinux::lib::ErrorOr<HidMouseReport> UsbMouse::poll(XHCIController& hc) {
 }
 
 void UsbMouse::on_transfer_complete(uint8_t /*slot_id*/, uint8_t /*epid*/, const Trb& ev) {
-    // Runs in hard-IRQ context (the xHCI MSI-X handler).  The controller has
-    // written the report into report_buf_; decode it and inject into the GUI
-    // event queue (Mouse::inject_usb_motion -- dy NOT inverted, HID convention).
+    // Reached from poll_events(), which the gui_worker calls each frame (the
+    // MSI-X transfer-complete interrupt is not reliably delivered under
+    // QEMU/nested-KVM, so the event ring is polled).  The controller has written
+    // the report into report_buf_; decode it and inject into the GUI event queue
+    // (Mouse::inject_usb_motion -- dy NOT inverted, HID convention).
     const uint32_t code = cmd_completion_code(ev.status);
     if (code == CompCode::kSuccess || code == CompCode::kShortPacket) {
         const HidMouseReport rpt =

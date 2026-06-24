@@ -35,6 +35,7 @@ extern "C" uint8_t ap_cr3[];
 extern "C" uint8_t ap_kernel_cr3[];
 extern "C" uint8_t ap_cpu_id[];
 extern "C" void    ap_entry_long();  // higher-half asm stub (trampoline jumps here)
+extern "C" void    usermode_init_asm();  // BSP's STAR/EFER.SCE/SFMASK setup (usermode.S)
 
 namespace cinux::arch {
 
@@ -120,6 +121,13 @@ extern "C" void ap_main(uint64_t cpu_id) {
     // 2. Load this CPU's GDT (per-CPU TSS/IST) and the shared IDT.
     gdt_blocks[cpu_id].init();
     g_idt.load();
+
+    // 2b. Configure this CPU's syscall MSRs (STAR / SFMASK / EFER.SCE).  The BSP
+    //     does this in usermode_init(); the AP must too, or a user task that
+    //     migrates here will #UD on its very first SYSRETQ (EFER.SCE == 0 on the
+    //     AP -- the trampoline sets only EFER.LME).  Same class of "AP didn't
+    //     match the BSP's CPU config" as the missing CR4.OSFXSR.
+    usermode_init_asm();
 
     // 3. Enable this CPU's Local APIC.  The MMIO window the BSP mapped decodes
     //    to whichever CPU accesses it, so g_lapic drives the local one.
@@ -241,12 +249,11 @@ void boot_aps() {
 // pulls the AP out of hlt and its loop runs schedule() again.
 // ============================================================
 
-// The handler is a LAPIC EOI no-op.  The actual reschedule happens in the AP's
-// idle loop after this stub returns control to the hlt instruction.  IPIs are
-// LAPIC vectors, so EOI goes straight to the local APIC -- not through the
-// IRQ-line-keyed irq_eoi() dispatch.
+// The handler body is empty: the ISR_IRQ stub sends the EOI.  The actual
+// reschedule happens in the AP's idle loop after this stub returns control to
+// the hlt instruction.
 extern "C" void reschedule_ipi_handler(InterruptFrame* /*frame*/) {
-    drivers::apic::g_lapic.eoi();
+    // EOI is sent by the ISR_IRQ stub.
 }
 
 void wake_idle_ap() {

@@ -12,8 +12,6 @@
 
 #include "hid.hpp"  // HID keycode->ASCII tables + modifier bits (USB keyboard)
 #include "kernel/arch/x86_64/io.hpp"
-#include "kernel/arch/x86_64/irq_backend.hpp"
-#include "kernel/arch/x86_64/pic.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/proc/sync.hpp"
 
@@ -22,7 +20,6 @@
 #    include "kernel/gui/event.hpp"
 #endif
 
-using cinux::arch::PIC;
 using cinux::io::io_inb;
 using cinux::io::io_outb;
 using cinux::io::io_wait;
@@ -234,13 +231,11 @@ void Keyboard::irq1_handler(cinux::arch::InterruptFrame* /*frame*/) {
     // USB keyboard owns input: drain the PS/2 byte but do not feed the queue
     // (single producer for the SPSC event queue + ring buffer).
     if (usb_primary_) {
-        PIC::send_eoi(1);
         return;
     }
 
     // Handle extended scan code prefix (0xE0) -- skip for now
     if (sc == ScanCode::EXTENDED) {
-        cinux::arch::irq_eoi(1);
         return;
     }
 
@@ -266,7 +261,7 @@ void Keyboard::irq1_handler(cinux::arch::InterruptFrame* /*frame*/) {
     }
 
     dispatch_key(sc, ascii, pressed, shift_held_, ctrl_held_, alt_held_);
-    PIC::send_eoi(1);
+    // EOI is sent by the ISR_IRQ stub after this handler returns.
 }
 
 // ============================================================
