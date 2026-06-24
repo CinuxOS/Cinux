@@ -127,6 +127,20 @@ public:
     static void inject_usb_motion(int8_t dx, int8_t dy, uint8_t buttons);
 
     /**
+     * @brief Inject an absolute pointing-device report (USB tablet).
+     *
+     * Sets the cursor directly to the screen pixel mapped from the tablet's
+     * 0..32767 logical X/Y range, so the cursor tracks the host cursor exactly
+     * (a relative mouse drifts at the screen edge -- two-cursor skew).  Same
+     * button bit layout as the boot mouse (0=left, 1=right, 2=middle).
+     *
+     * @param tx       Tablet X (0..32767 logical range)
+     * @param ty       Tablet Y (0..32767 logical range)
+     * @param buttons  bit0=left, bit1=right, bit2=middle
+     */
+    static void inject_usb_absolute(uint16_t tx, uint16_t ty, uint8_t buttons);
+
+    /**
      * @brief Select the active input source.
      *
      * When USB is primary, PS/2 packet bytes are ignored (the PS/2 path does
@@ -147,6 +161,18 @@ private:
      * screen bounds, detects button edges, and enqueues the events.
      */
     static void apply_motion(int32_t dx, int32_t dy_screen, uint8_t new_buttons);
+
+    /**
+     * @brief Set the cursor to an absolute screen position + enqueue events.
+     *
+     * Shared core used by apply_motion (relative: new = old + delta) and
+     * inject_usb_absolute (tablet: new = mapped tablet coord).  Sets mouse_x_/y_
+     * to the clamped (@p new_x, @p new_y), then enqueues move/down/up events
+     * whose reported delta is (@p ev_dx, @p ev_dy) -- the relative path passes
+     * its input delta, the absolute path passes the actual move.
+     */
+    static void update_absolute(int32_t new_x, int32_t new_y, int32_t ev_dx, int32_t ev_dy,
+                                uint8_t new_buttons);
 
     /**
      * @brief Accumulate a byte from the mouse data port

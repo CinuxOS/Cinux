@@ -46,6 +46,30 @@ constexpr HidMouseReport decode_boot_mouse(const uint8_t* r) {
 }
 
 // ============================================================
+// HID tablet (absolute pointer) report decode -- QEMU usb-tablet
+// ============================================================
+
+/// HID absolute-pointer report (QEMU usb-tablet, 5 bytes): byte0 = buttons
+/// (bit0=left / 1=right / 2=middle), then X and Y as 16-bit little-endian in
+/// the logical range 0..32767 (0x7FFF).  Unlike the boot mouse, X/Y are
+/// ABSOLUTE screen coordinates, so the guest cursor can track the host cursor
+/// exactly (no two-cursor edge drift).
+struct TabletReport {
+    uint8_t  buttons;  ///< bit0=left, bit1=right, bit2=middle
+    uint16_t x;        ///< absolute X, 0..32767
+    uint16_t y;        ///< absolute Y, 0..32767
+};
+
+/// Decode a 5-byte QEMU usb-tablet report.  @p r points to >=5 bytes.  Pure.
+constexpr TabletReport decode_tablet(const uint8_t* r) {
+    return TabletReport{static_cast<uint8_t>(r[0] & 0x07),
+                        static_cast<uint16_t>(static_cast<uint16_t>(r[1]) |
+                                              (static_cast<uint16_t>(r[2]) << 8)),
+                        static_cast<uint16_t>(static_cast<uint16_t>(r[3]) |
+                                              (static_cast<uint16_t>(r[4]) << 8))};
+}
+
+// ============================================================
 // Configuration-descriptor walk -> HID boot mouse interrupt-IN endpoint
 // ============================================================
 

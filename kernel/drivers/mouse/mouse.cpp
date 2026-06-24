@@ -251,12 +251,11 @@ void Mouse::decode_packet(uint8_t b0, uint8_t b1, uint8_t b2) {
 // HID Y convention -- dy NOT inverted).
 // ============================================================
 
-void Mouse::apply_motion(int32_t dx, int32_t dy_screen, uint8_t new_buttons) {
-    // Update absolute cursor position (dy_screen already in screen space).
-    mouse_x_ += dx;
-    mouse_y_ += dy_screen;
-
-    // Clamp to screen bounds
+void Mouse::update_absolute(int32_t new_x, int32_t new_y, int32_t ev_dx, int32_t ev_dy,
+                            uint8_t new_buttons) {
+    // Set the absolute cursor position (clamp to screen bounds).
+    mouse_x_ = new_x;
+    mouse_y_ = new_y;
     if (mouse_x_ < 0) {
         mouse_x_ = 0;
     }
@@ -274,19 +273,21 @@ void Mouse::apply_motion(int32_t dx, int32_t dy_screen, uint8_t new_buttons) {
     uint8_t pressed  = new_buttons & ~prev_buttons_;  // Bits newly set
     uint8_t released = prev_buttons_ & ~new_buttons;  // Bits newly cleared
 
-    // Build a MouseEvent with the current state
+    // Build a MouseEvent with the current state.  The reported delta is the
+    // caller-supplied (ev_dx, ev_dy): the relative path passes its input delta,
+    // the absolute (tablet) path passes the actual cursor move.
     MouseEvent me{};
     me.x       = mouse_x_;
     me.y       = mouse_y_;
-    me.dx      = dx;
-    me.dy      = dy_screen;  // screen-space delta (positive = downward)
+    me.dx      = ev_dx;
+    me.dy      = ev_dy;  // screen-space delta (positive = downward)
     me.buttons = new_buttons;
     me.left    = (new_buttons & Packet0::LEFT_BTN) != 0;
     me.right   = (new_buttons & Packet0::RIGHT_BTN) != 0;
     me.middle  = (new_buttons & Packet0::MIDDLE_BTN) != 0;
 
     // If there was any movement, enqueue a MouseMove event
-    if (dx != 0 || dy_screen != 0) {
+    if (ev_dx != 0 || ev_dy != 0) {
         Event ev{};
         ev.type_ = EventType::MouseMove;
         ev.mouse = me;
@@ -336,6 +337,29 @@ void Mouse::apply_motion(int32_t dx, int32_t dy_screen, uint8_t new_buttons) {
     // Update state for next packet
     buttons_      = new_buttons;
     prev_buttons_ = new_buttons;
+}
+
+void Mouse::apply_motion(int32_t dx, int32_t dy_screen, uint8_t new_buttons) {
+    // Relative path: new absolute position = old + delta; report the input delta.
+    update_absolute(mouse_x_ + dx, mouse_y_ + dy_screen, dx, dy_screen, new_buttons);
+}
+
+// ============================================================
+// Mouse::inject_usb_absolute() -- USB tablet (absolute pointer)
+// ============================================================
+
+void Mouse::inject_usb_absolute(uint16_t tx, uint16_t ty, uint8_t buttons) {
+    // QEMU usb-tablet reports X/Y in the logical range 0..32767 (0x7FFF).  Map
+    // linearly to screen pixels and set the cursor absolutely -- the host cursor
+    // and the Cinux cursor then coincide (no two-cursor edge drift).  Buttons
+    // share the boot-mouse bit layout (0=left, 1=right, 2=middle).
+    const int32_t span_x = static_cast<int32_t>(screen_width_);
+    const int32_t span_y = static_cast<int32_t>(screen_height_);
+    const int32_t sx     = (static_cast<int32_t>(tx) * span_x) / 32768;
+    const int32_t sy     = (static_cast<int32_t>(ty) * span_y) / 32768;
+    const uint8_t mask   = Packet0::LEFT_BTN | Packet0::RIGHT_BTN | Packet0::MIDDLE_BTN;
+    // Report the actual move (new - old) so a move event fires on real changes.
+    update_absolute(sx, sy, sx - mouse_x_, sy - mouse_y_, buttons & mask);
 }
 
 // ============================================================

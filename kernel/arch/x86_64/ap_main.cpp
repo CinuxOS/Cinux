@@ -152,7 +152,9 @@ extern "C" void ap_main(uint64_t cpu_id) {
     //     (F5-M5 -smp Shell keyboard).  Periodic, /16, count tuned for a
     //     few-hundred-Hz tick -- see lapic_timer_handler (mirrors the PIT path).
     constexpr uint8_t  kTimerDivide = 0x3;        // divide by 16
-    constexpr uint32_t kTimerCount  = 1'000'000;  // ~tick rate (tune if needed)
+    constexpr uint32_t kTimerCount  = 200'000;    // ~300 Hz preemption (was 1e6 ~60 Hz ->
+                                                  // gui_worker only ~30 Hz = choppy cursor once
+                                                  // the usb-tablet tracks precisely)
     drivers::apic::g_lapic.setup_periodic_timer(kLapicTimerVector, kTimerDivide, kTimerCount);
 
     lib::kprintf("[AP%lu] online (apic_id=%u)\n", cpu_id, pcpu->apic_id);

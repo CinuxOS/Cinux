@@ -19,7 +19,7 @@
 #include "kernel/drivers/keyboard/keyboard.hpp"
 #include "kernel/drivers/keyboard/usb_keyboard.hpp"
 #include "kernel/drivers/mouse/mouse.hpp"
-#include "kernel/drivers/mouse/usb_mouse.hpp"
+#include "kernel/drivers/mouse/usb_tablet.hpp"
 #include "kernel/drivers/pci/pci.hpp"
 #include "kernel/drivers/usb/usb_descriptor.hpp"
 #include "kernel/drivers/usb/xhci_controller.hpp"
@@ -40,7 +40,7 @@ namespace cinux::drivers::usb {
 namespace {
 XHCIController              g_xhci;
 XhciSlot                    g_slots[2];  ///< one per enumerated boot device
-cinux::drivers::UsbMouse    g_mouse;
+cinux::drivers::UsbTablet   g_tablet;
 cinux::drivers::UsbKeyboard g_keyboard;
 }  // namespace
 
@@ -113,17 +113,20 @@ void init() {
             if (!slot.set_configuration(g_xhci, 1).ok()) {
                 continue;
             }
-            g_mouse.bind(slot);
-            g_xhci.register_transfer_listener(slot.slot_id(), &g_mouse);
-            if (!g_mouse.init(g_xhci, mep).ok()) {
-                cinux::lib::kprintf("[xHCI] HID boot mouse init failed (port=%u)\n", port);
+            // The pointing device is a QEMU usb-tablet (absolute): find_boot_mouse
+            // matches its HID boot-mouse interface (class 3/1/2); UsbTablet
+            // decodes the absolute X/Y report so the cursor tracks the host.
+            g_tablet.bind(slot);
+            g_xhci.register_transfer_listener(slot.slot_id(), &g_tablet);
+            if (!g_tablet.init(g_xhci, mep).ok()) {
+                cinux::lib::kprintf("[xHCI] HID tablet init failed (port=%u)\n", port);
                 continue;
             }
-            g_mouse.arm();
+            g_tablet.arm();
             cinux::drivers::Mouse::set_usb_primary(true);
             mouse_ok = true;
             ++slot_idx;
-            cinux::lib::kprintf("[xHCI] HID boot mouse armed: port=%u ep%u-IN (async)\n", port,
+            cinux::lib::kprintf("[xHCI] HID tablet armed: port=%u ep%u-IN (async absolute)\n", port,
                                 mep.ep_number);
         } else if (!kbd_ok && find_boot_keyboard(desc, cfg_len, kep)) {
             if (!slot.set_configuration(g_xhci, 1).ok()) {
