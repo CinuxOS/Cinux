@@ -40,6 +40,12 @@
 | D14 | 整数溢出 / 边界 | ✅ 已审 2026-06-21 | DEBT-020(ELF 字段算术)+ DEBT-012(phnum)；见 `reports/2026-06-21-d14-d9-audit.md` |
 
 **进度**：**14/14 全审完成**（D1-D14，F-QA Q3 收官 2026-06-21）。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪 + 全量实战（F-QA Q2），见 `document/todo/quality/audit-guide.md`。新债 DEBT-018/019/020 + DEBT-002 精确坐实 → 喂 Q4。
+
+### 子系统专项审计（F-QA follow-up，补 Q3 后合入的未审面）
+
+| 子系统 | 审计日期 | 维度 | 结论 | 报告 |
+|---|---|---|---|---|
+| xHCI/USB | 2026-06-25（F-CLN 批0）| D2+D3+D4 | D2/D4 清洁（零堆分配 + 全局静态 RAII）；**D3 fail → DEBT-021**（poll_events 无锁多上下文并发）| `reports/2026-06-25-xhci-usb-audit.md` |
 **修债进展**：**Q4✅ 收官（2026-06-21）** —— Q4a 类型先行（RefCount/UserPtr）+ Q4b-e 修 6 债（DEBT-001/002/003/004/005/006 全 ✅,见各条）。9 批 + 1 fix（feat/f-qa-q4）。验证 run-kernel-test 887/0 + -smp 2 + LOCKDEP + host-ASAN 全绿。详见 `document/notes/2026-06-21-f-qa-q4-debt-convergence.md`。
 
 ---
@@ -111,6 +117,14 @@
 - **修复建议**: path 缓冲改堆(`kmalloc(PATH_MAX)` + RAII 释放,复用 F2-M7b slab)或专用 per-call path 缓冲设施;目标单帧 <1024B。修后启用 `-Wframe-larger-than=1024 -Werror=frame-larger-than` 入门禁。
 - **验证建议**: 修后 `-Wframe-larger-than=1024` 零命中 → 升 `-Werror=frame-larger-than`;`timeout 40 run-kernel-test` 绿(碰 syscall 路径)。
 - **关联 GOTCHA**: 无
+
+### DEBT-021 `XHCIController::poll_events` 无锁，多上下文并发 → event ring 数据竞争
+- **维度**: 并发/SMP(D3)　**优先级**: P1　**状态**: 🆕 登记待办（F-CLN 批0 审计发现）　**核验**: ✅ 读码坐实
+- **位置**: `kernel/drivers/usb/xhci_controller.cpp:272-302`(poll_events) + `:387-391`(event_irq_thunk ISR) + `kernel/proc/init.cpp:53`(gui_worker 每帧) + `xhci_controller.cpp:311,331`(run_command/run_transfer busy-poll) + `kernel/drivers/usb/xhci_ring.cpp:61-76`(EventRing::dequeue)
+- **现象**: `poll_events` 完全无锁，被三个上下文调：① gui_worker 线程每帧(init.cpp:53) ② usb::init 枚举线程的 run_command/run_transfer busy-poll(:311/:331) ③ MSI-X ISR event_irq_thunk(:389，QEMU+nested-KVM 下潜伏)。`EventRing::dequeue`(xhci_ring.cpp:61) 非原子——读 `dequeue_`/检查 cycle/`++dequeue_`/wrap flip `ccs_` 全无保护。
+- **根因**: 设计假设"poll_events 单上下文串行"，但代码三处调。**当前①②两线程就并发**（kernel_init_thread 跑 usb::init 时 gui_worker 已 launch 持续 pump，见 init.cpp:36-58）。`dequeue_` 指针竞争 → 两线程读同 slot → 事件重复消费/丢失 + ERDP 写竞争错位 + listener on_transfer_complete 重入 inject。**侥幸不炸**：usb::init 枚举快(0.94s)窗口短 + gui_worker pump 时 event ring 多空。真机/新 QEMU MSI-X 中断触发后③加入，更剧烈(含同 CPU ISR 重入)。
+- **修复建议**: poll_events 加 irq-safe Spinlock（acquire 覆盖 dequeue 循环 + ERDP 写 + listener 分发），对齐 Linux xHCI `spin_lock_irqsave` 单上下文化；EventRing::dequeue 持锁即安全。listener on_transfer_complete 若 inject SPSC 队列，锁内串行即恢复单生产者。
+- **关联 GOTCHA**: 无（xHCI 并发未记）
 
 ---
 

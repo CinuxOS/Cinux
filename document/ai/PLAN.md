@@ -12,7 +12,7 @@
 
 | 批 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
-| 0 | xHCI/USB 专项审（D2 内存+D3 并发+D4 生命周期，deterministic 四段式，只读→报告+新债登记） | 🔄 | (本次) | docs-only |
+| 0 | xHCI/USB 专项审（D2 内存+D3 并发+D4 生命周期，deterministic 四段式，只读→报告+新债登记） | ✅ | (本次) | docs-only；D2/D4 清洁，D3→**DEBT-021(P1)** |
 | 1 | DEBT-015 核实 PathBuf 改堆后 frame-larger-than 残余 + 启用门禁/关债 | ⏳ | | |
 | 2 | DEBT-016 test framework 加 ASSERT_OK 宏 + 清 32 处忽略 + 去 -Wno-unused-result | ⏳ | | |
 | 3 | DEBT-018 kMaxCpus 统一单一权威（percpu=8 vs acpi=16）+ static_assert | ⏳ | | |
