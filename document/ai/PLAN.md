@@ -2,6 +2,19 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
+## 🔄 F5-M6（e1000 NIC 驱动）— 2026-06-25 立项，与 F9 并行
+
+> worktree `worktree-f5-m6-e1000`（从干净 main `8be32d4` 拉，零 F9 污染；F9 在 feat/f9-security 上继续，两者零依赖）。F7 网络协议栈被 F5-NIC 阻塞（ROADMAP「F5 网卡→阻塞整个网络栈」），F5-M6 e1000 是 F7-M1 以太网层的地基。整条 HW 跑道（PCI / DmaPool / MSI-X / ISR / poll）已被 xHCI/AHCI 验过，e1000 是现有套路延伸。**polling 优先**（QEMU nested-KVM 不可靠锁存中断）。用户决策「先把驱动打通」，跳过立项 docs。
+> 验证：`timeout 40 cmake --build build --target run-kernel-test -j$(nproc)`（带 `-device e1000`）；改 pci.hpp 公共头补全量。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| a | PCI find_e1000 + E1000Controller（BAR0 映射 + 复位 + EERD 读 EEPROM MAC + 链路）+ CINUX_NET gate + test + QEMU -device e1000 | ✅ | (本批) | 932/0 + MAC=52:54:00:12:34:56 link=1 + 全量绿 |
+| b | RX 描述符环（legacy 16B）+ RCTL + poll_rx 收一帧 + net::poll_rx boot 接口 + net_stub | ⏳ | | |
+| c | TX + 中断（MSI / legacy INTx，非 MSI-X）替代 polling | ⏳（延后） | | |
+
+> 批a 详见 [note](../notes/2026-06-25-f5-m6-e1000-b1-detect-mac.md)。延后项见 note 边界节。
+
 ## 🔄 F-GUI-DECOUPLE（GUI 模块独立化 / 消源码 #ifdef）— 2026-06-25 立项
 
 > 横切里程碑（接 F-CLN）。目标：消 main/init/irq 的源码 `#ifdef CINUX_GUI/CINUX_USB` 读半截路（§14 真违规），让开关全归 CMake。CMake 文件级 gate 框架已就位（F-CLN 清了 keyboard/pit），只剩抽象 + stub 化的机械活。来源：2026-06-25 用户「考虑 GUI 分离」+ memory `gui-decouple-milestone`（独立里程碑，不混 #ifdef 清理批）。

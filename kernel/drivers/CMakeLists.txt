@@ -74,3 +74,13 @@ if(NOT CINUX_USB)
         ${CMAKE_CURRENT_SOURCE_DIR}/usb/usb_xhci_stub.cpp
     )
 endif()
+
+# F5-M6 e1000: Intel NIC driver (core controller), §14 file gate like USB.
+# Independent of GUI/USB (standalone PCI hardware).  批a: detect + reset +
+# EEPROM MAC; 批b adds the legacy RX ring + polled receive.  TX and the MSI
+# interrupt path are deferred.
+if(CINUX_NET)
+    target_sources(big_kernel_common PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/net/e1000.cpp
+    )
+endif()
