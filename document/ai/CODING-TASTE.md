@@ -163,3 +163,38 @@ uint8_t mapped = ((buttons & 0x01) ? LEFT : 0) |
 uint8_t mapped = buttons & (LEFT_BTN | RIGHT_BTN | MIDDLE_BTN);
 ```
 推而广之：位运算期望值写进测试前，自己用常量重算一遍（别凭「2<<10」直觉——`1<<10=0x400`、`2<<10=0x800`，搞反过）。
+
+## 14. 编译期开关（`#ifdef`）——开关归 CMake，源码不读半截路
+
+> 来源：GUI 的 `#ifdef CINUX_GUI` 渗透进 init/PIT/keyboard/main 四处（2026-06-25 审查），读代码读到一半撞 `#else` 要脑补两路。OS 这种长期项目，**别让 `#ifdef` 长在别人函数的肚子里**——后面读/改都费劲。
+
+**核心**：编不编某功能，是 CMake 的事；源码读起来该是「全编进去也读得通」，不该让审查者为了读个函数去猜哪段编不编。
+
+**四条规矩**：
+1. **可选功能整个搬进它自己的文件**，CMake 决定编不编（`if(CINUX_USB) target_sources(...)`）。别处要调它就一句普通调用；没编时给个**空壳文件**顶上（同函数名，啥也不干），让链接器选一份 → 调用处零 `#ifdef`。
+2. **小诊断开关**（lockdep 这种「要不要加点检查」）包成一个宏，调用处就一行，看不见 `#ifdef`。
+3. `#ifdef` 只用在两个地方：头守卫（`#pragma once` 那种）、真是两个程序（host 测试 vs 真内核）。
+4. **最忌讳**：函数读到一半 `#ifdef` 分叉两条路（带 `#else`）。能消就消——收进独立文件 + 空壳，或重构让分支消失。
+
+**反例**（init.cpp，本批清理）：`kernel_init_thread` 读到一半分叉两条路：
+```cpp
+#ifdef CINUX_GUI
+    ... 启动桌面 ...
+#else
+    ... 不启桌面的另一套 ...
+#endif
+```
+读者要在脑子里同时装两条线，到 `#endif` 才喘气。
+
+**正例**（USB，已对）：
+```cmake
+# drivers/CMakeLists.txt —— 文件级 gate
+if(CINUX_USB) target_sources(usb_init.cpp) else target_sources(usb_stub.cpp) endif()
+```
+```cpp
+// 别处（init/main）—— 一句普通调用
+usb::init();   // 没编 USB 时链到 usb_stub 的空壳，啥也不干
+```
+调用处零 `#ifdef`，读起来就是一条直线。
+
+**一句话**：开关的归属在 CMake，不在源码。可选的东西要么整文件 + 空壳，要么宏包起来；别让 `#ifdef` 长在别人函数的肚子里。
