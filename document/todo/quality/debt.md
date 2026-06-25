@@ -48,6 +48,8 @@
 | xHCI/USB | 2026-06-25（F-CLN 批0）| D2+D3+D4 | D2/D4 清洁（零堆分配 + 全局静态 RAII）；**D3 fail → DEBT-021**（poll_events 无锁多上下文并发）| `reports/2026-06-25-xhci-usb-audit.md` |
 **修债进展**：**Q4✅ 收官（2026-06-21）** —— Q4a 类型先行（RefCount/UserPtr）+ Q4b-e 修 6 债（DEBT-001/002/003/004/005/006 全 ✅,见各条）。9 批 + 1 fix（feat/f-qa-q4）。验证 run-kernel-test 887/0 + -smp 2 + LOCKDEP + host-ASAN 全绿。详见 `document/notes/2026-06-21-f-qa-q4-debt-convergence.md`。
 
+**F-CLN✅ 收官（2026-06-25）** —— 批0 xHCI/USB 专项审（登记 DEBT-021 poll_events 并发,留 xHCI 重构）+ 批1-7 修 7 债（DEBT-015 栈帧/016 ASSERT_OK/018 kMaxCpus/008 signal VMA/009 huge/010 FDTable refcount/007 quantum per-task 全 ✅,见各条）。feat/f-cln-debt。验证 run-kernel-test 931/0 + -smp 2 + LOCKDEP + host ctest 54/0 全绿。残留 open:DEBT-019/013/020/012(留 F10 顺手)+011/014(低危)+021(xHCI 并发)。详见各批 notes `document/notes/2026-06-25-f-cln-b{0..8}-*.md`。
+
 ---
 
 ## 根因归纳（最重要的洞察）
