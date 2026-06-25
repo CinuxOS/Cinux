@@ -221,8 +221,12 @@ int64_t sys_mprotect(uint64_t addr, uint64_t length, uint64_t prot, uint64_t, ui
     if ((prot & PROT_WRITE) != 0) {
         pte_flags |= cinux::arch::FLAG_WRITABLE;
     }
-    // NX deferred until EFER.NXE is enabled (F9 NX/SMEP/SMAP): bit 63 is
-    // reserved now and would cause a reserved-bit #PF on access.
+    // F9 batch 2: NXE is on -- non-executable mappings get the NX bit (bit 63
+    // is valid now; was a reserved-bit #PF before EFER.NXE). PROT_EXEC stays
+    // executable; everything else is NX (W^X).
+    if ((prot & PROT_EXEC) == 0) {
+        pte_flags |= cinux::arch::FLAG_NX;
+    }
     for (uint64_t v = addr; v < addr + aligned_len; v += kPageSize) {
         const uint64_t phys = task->addr_space->translate(v);
         if (phys != 0) {

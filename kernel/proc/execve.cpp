@@ -79,8 +79,8 @@ void clear_user_mappings(cinux::mm::AddressSpace& space) {
 
             // DEBT-009: a 1 GB huge PDPTE maps a data page, not a PD table --
             // descending would parse the huge-page body as PD/PT entries and
-            // free garbage.  Huge-page free (buddy order) isn't wired yet (NXE
-            // off, no user huge mappings); clear the entry and skip.  Hitting
+            // free garbage.  Huge-page free (buddy order) isn't wired yet
+            // (no user huge mappings); clear the entry and skip.  Hitting
             // this means a future huge-mapping milestone forgot this path.
             if (pdpt[j].huge) {
                 cinux::lib::kprintf(
