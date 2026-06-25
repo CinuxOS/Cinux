@@ -102,7 +102,8 @@ void run_pmm_mapcount_tests();
 #ifdef CINUX_USB
 void run_xhci_tests();
 #endif
-void run_aslr_tests();  // F9 batch 8: ASLR offset helpers
+void run_aslr_tests();   // F9 batch 8: ASLR offset helpers
+void run_creds_tests();  // F9 batch 9: process credentials
 }
 
 static constexpr uintptr_t BOOT_INFO_PHYS = 0x7000;
@@ -248,7 +249,8 @@ extern "C" void kernel_main() {
     // Block device tests (M4): IBlockDevice interface + RAMBlockDevice stub (M4-1)
     run_block_device_tests();
 
-    run_aslr_tests();  // F9 batch 8: ASLR offset helpers (page-align / range / vary)
+    run_aslr_tests();   // F9 batch 8: ASLR offset helpers (page-align / range / vary)
+    run_creds_tests();  // F9 batch 9: process credentials
     run_usermode_tests();
 
     cinux::arch::syscall_init();
