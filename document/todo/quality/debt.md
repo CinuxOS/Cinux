@@ -40,7 +40,15 @@
 | D14 | 整数溢出 / 边界 | ✅ 已审 2026-06-21 | DEBT-020(ELF 字段算术)+ DEBT-012(phnum)；见 `reports/2026-06-21-d14-d9-audit.md` |
 
 **进度**：**14/14 全审完成**（D1-D14，F-QA Q3 收官 2026-06-21）。deterministic 四段式方法论（A 锚点 / B 不变点 / C 门槛 / D 闭环）已就绪 + 全量实战（F-QA Q2），见 `document/todo/quality/audit-guide.md`。新债 DEBT-018/019/020 + DEBT-002 精确坐实 → 喂 Q4。
+
+### 子系统专项审计（F-QA follow-up，补 Q3 后合入的未审面）
+
+| 子系统 | 审计日期 | 维度 | 结论 | 报告 |
+|---|---|---|---|---|
+| xHCI/USB | 2026-06-25（F-CLN 批0）| D2+D3+D4 | D2/D4 清洁（零堆分配 + 全局静态 RAII）；**D3 fail → DEBT-021**（poll_events 无锁多上下文并发）| `reports/2026-06-25-xhci-usb-audit.md` |
 **修债进展**：**Q4✅ 收官（2026-06-21）** —— Q4a 类型先行（RefCount/UserPtr）+ Q4b-e 修 6 债（DEBT-001/002/003/004/005/006 全 ✅,见各条）。9 批 + 1 fix（feat/f-qa-q4）。验证 run-kernel-test 887/0 + -smp 2 + LOCKDEP + host-ASAN 全绿。详见 `document/notes/2026-06-21-f-qa-q4-debt-convergence.md`。
+
+**F-CLN✅ 收官（2026-06-25）** —— 批0 xHCI/USB 专项审（登记 DEBT-021 poll_events 并发,留 xHCI 重构）+ 批1-7 修 7 债（DEBT-015 栈帧/016 ASSERT_OK/018 kMaxCpus/008 signal VMA/009 huge/010 FDTable refcount/007 quantum per-task 全 ✅,见各条）。feat/f-cln-debt。验证 run-kernel-test 931/0 + -smp 2 + LOCKDEP + host ctest 54/0 全绿。残留 open:DEBT-019/013/020/012(留 F10 顺手)+011/014(低危)+021(xHCI 并发)。详见各批 notes `document/notes/2026-06-25-f-cln-b{0..8}-*.md`。
 
 ---
 
@@ -103,8 +111,9 @@
 - **修复建议**: `PidAllocator` 内置 irq-safe `Spinlock`，alloc/free/is_allocated 持锁；或 atomic bitmap + CAS。
 - **关联 GOTCHA**: 无
 
-### DEBT-015 syscall handler 栈帧过大（char[PATH_MAX] 缓冲置栈，4-8KB/16KB 栈）
-- **维度**: 内存安全(栈)　**优先级**: P1　**状态**: 🆕 登记待办(F-QA Q1-1 触发)　**核验**: ✅ -Wframe-larger-than=1024 坐实
+### DEBT-015 syscall handler 栈帧过大（char[PATH_MAX] 缓冲置栈，4-8KB/16KB 栈）✅
+- **维度**: 内存安全(栈)　**优先级**: P1　**状态**: ✅ 已修（F-CLN 批1,2026-06-25）　**核验**: ✅ big_kernel -Wframe-larger-than=1024 零命中
+- **闭环**: 8 个 syscall(creat/mkdir/unlink/rmdir/open/chdir/stat/path)早年改 `PathBuf`(堆,path.cpp:19 "was char[PATH_MAX] on the stack");**批1 补最后残余 `sys_dmesg`** `LogEntry[16]`(272B×16=4.4KB)改 `new[]`/`delete[]` 堆。big_kernel 生产零 frame 命中。**门禁**:`-Wframe-larger-than=1024` warning 级保留(big_kernel_common PUBLIC);**GCC 技术限制**——`-Werror=frame-larger-than` GCC 拒绝(带参 warning 名不支持 -Werror= 升级),故硬门禁靠审计 grep 非构建失败;`big_kernel_test` `-Wno-frame-larger-than`(test fixture 栈大是设计)。详见 `document/notes/2026-06-25-f-cln-b1-debt015-frame-size.md`。
 - **位置**: `kernel/syscall/sys_creat.cpp:29,44`(8272B) / `sys_mkdir.cpp:74`(8256) / `sys_unlink.cpp:74`(8240) / `sys_rmdir.cpp:103`(8288) / `sys_open.cpp:72`(4144) / `sys_chdir.cpp:78`(4144) / `sys_stat.cpp:75`(4224) / `sys_dmesg.cpp:109`(4400) / `kernel/fs/path.cpp:88`(4096)
 - **现象**: 9 个 syscall/path handler 在 16KB 核栈上放 `char resolved[PATH_MAX]`(4096) + 常第二个 `char parent_buf[PATH_MAX]` → 单帧 4-8KB。`-Wframe-larger-than=1024` 全部命中。
 - **根因**: path 解析缓冲放栈上(对齐 POSIX PATH_MAX)；sys_creat 尤甚(两个 PATH_MAX=8KB)。16KB 栈下 syscall 上下文 + 中断嵌套 + 调用链(lookup/create)有溢出风险。Linux 用 `getname`/`struct filename` 堆分配 path。
@@ -112,12 +121,21 @@
 - **验证建议**: 修后 `-Wframe-larger-than=1024` 零命中 → 升 `-Werror=frame-larger-than`;`timeout 40 run-kernel-test` 绿(碰 syscall 路径)。
 - **关联 GOTCHA**: 无
 
+### DEBT-021 `XHCIController::poll_events` 无锁，多上下文并发 → event ring 数据竞争
+- **维度**: 并发/SMP(D3)　**优先级**: P1　**状态**: 🆕 登记待办（F-CLN 批0 审计发现）　**核验**: ✅ 读码坐实
+- **位置**: `kernel/drivers/usb/xhci_controller.cpp:272-302`(poll_events) + `:387-391`(event_irq_thunk ISR) + `kernel/proc/init.cpp:53`(gui_worker 每帧) + `xhci_controller.cpp:311,331`(run_command/run_transfer busy-poll) + `kernel/drivers/usb/xhci_ring.cpp:61-76`(EventRing::dequeue)
+- **现象**: `poll_events` 完全无锁，被三个上下文调：① gui_worker 线程每帧(init.cpp:53) ② usb::init 枚举线程的 run_command/run_transfer busy-poll(:311/:331) ③ MSI-X ISR event_irq_thunk(:389，QEMU+nested-KVM 下潜伏)。`EventRing::dequeue`(xhci_ring.cpp:61) 非原子——读 `dequeue_`/检查 cycle/`++dequeue_`/wrap flip `ccs_` 全无保护。
+- **根因**: 设计假设"poll_events 单上下文串行"，但代码三处调。**当前①②两线程就并发**（kernel_init_thread 跑 usb::init 时 gui_worker 已 launch 持续 pump，见 init.cpp:36-58）。`dequeue_` 指针竞争 → 两线程读同 slot → 事件重复消费/丢失 + ERDP 写竞争错位 + listener on_transfer_complete 重入 inject。**侥幸不炸**：usb::init 枚举快(0.94s)窗口短 + gui_worker pump 时 event ring 多空。真机/新 QEMU MSI-X 中断触发后③加入，更剧烈(含同 CPU ISR 重入)。
+- **修复建议**: poll_events 加 irq-safe Spinlock（acquire 覆盖 dequeue 循环 + ERDP 写 + listener 分发），对齐 Linux xHCI `spin_lock_irqsave` 单上下文化；EventRing::dequeue 持锁即安全。listener on_transfer_complete 若 inject SPSC 队列，锁内串行即恢复单生产者。
+- **关联 GOTCHA**: 无（xHCI 并发未记）
+
 ---
 
 ## 🟡 Medium
 
-### DEBT-018 `kMaxCpus` 两处定义不一致（同名不同值不同类型）
-- **维度**: 资源配额(D13)　**优先级**: P2　**状态**: 🆕 登记待办（F-QA Q3-1 审计发现）　**核验**: ✅ grep 坐实
+### DEBT-018 `kMaxCpus` 两处定义不一致（同名不同值不同类型）✅
+- **维度**: 资源配额(D13)　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批3,2026-06-25）　**核验**: ✅ grep 坐实改名
+- **闭环**: 两处语义本不同——`cinux::proc::kMaxCpus=8`(运行 CPU 上限,percpu_blocks/idle_tasks/gdt/g_held 用)vs `cinux::drivers::acpi::kMaxCpus=16`(MADT 记录容量,cpu_apic_ids 用)。不同 ns 不撞 ODR 但同名易混。**acpi 那个改名 `kMaxAcpiLapics`**(区分语义:ACPI 可能报 >运行上限的 LAPIC,ap_main 用 proc::kMaxCpus 限 AP 启动)。ap_main.cpp 加 `static_assert(proc::kMaxCpus <= acpi::kMaxAcpiLapics)`(记录容量须 ≥ 运行上限,否则拓扑静默截断)。验证 run-kernel-test 931/0 + **-smp 2** ALL PASSED。详见 `document/notes/2026-06-25-f-cln-b3-debt018-kmaxcpus.md`。
 - **位置**: `kernel/drivers/acpi/acpi.hpp:150`(`constexpr size_t kMaxCpus = 16`) / `kernel/proc/percpu.hpp:28`(`constexpr uint32_t kMaxCpus = 8`)
 - **现象**: `kMaxCpus` 两处定义：acpi=16(size_t)、percpu=8(uint32_t)。数组用不同值——`percpu_blocks[8]`/`idle_tasks_[8]`/`gdt_blocks[8]` 用 8；`cpu_apic_ids[16]` 用 16。`ap_main.cpp:189,260` `cpu < proc::kMaxCpus`(8)保护避免 OOB。
 - **根因**: (1) ACPI 报 >8 CPU 时 AP 静默不启动（丢弃，不报错）；(2) 同名常量两值违反单一定义（ODR 风险，编译期 TU 间可静默选其一）；(3) 类型不一致(size_t vs uint32_t)。当前 QEMU -smp 2 不触发，多核(>8)暴露。
@@ -132,40 +150,45 @@
 - **修复建议**: `AddressSpace` 加原子 refcount；clone CLONE_VM 时 acquire；线程退出 release，归 0 才 delete。与 DEBT-002 同批。
 - **关联 GOTCHA**: 无
 
-### DEBT-007 `quantum_remaining_` 单一共享 quantum → 多核时间片错乱
-- **维度**: 并发/SMP　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
+### DEBT-007 `quantum_remaining_` 单一共享 quantum → 多核时间片错乱 ✅
+- **维度**: 并发/SMP　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批7,2026-06-25）　**核验**: ✅ -smp2 + 单核回归
+- **闭环**: quantum 从 RoundRobin 类单一成员(`quantum_remaining_`)→ **per-task 字段**(`Task::quantum_remaining`,对齐 Linux `task_struct->rt.time_slice`)。原 multi-core bug:两核 tick 各自递减同一 `quantum_remaining_` → 实际时间片变 `DEFAULT_TIME_SLICE/ncpus`,一核 recharge 重置另一核正在跑的任务。改动:process.hpp Task 加 `int32_t quantum_remaining`;scheduler.hpp RoundRobin 删成员;roundrobin.cpp ctor/pick_next/clear/task_tick 改用 `task->quantum_remaining`;task_fork + TaskBuilder::build 设 child/新任务满量子(DEFAULT_TIME_SLICE)。验证 run-kernel-test 931/0 + **-smp 2** ALL PASSED + host ctest 54/0(单核 per-task 等价旧共享)。详见 `document/notes/2026-06-25-f-cln-b7-debt007-quantum-per-task.md`。
 - **位置**: `kernel/proc/roundrobin.cpp:40,109,142-156`
 - **现象**: `default_rr_` 全局单例的 `quantum_remaining_` 被 `lock_.irq_guard()` 保护（不崩溃），但两核 tick 各自递减同一变量。
 - **根因**: 实际时间片变 `DEFAULT_TIME_SLICE / ncpus`，一核耗尽 recharge 影响另一核正在跑的任务。**行为错非崩溃**，调度不可预测。
 - **修复建议**: quantum 改 per-task（`Task::quantum_remaining`）或 per-CPU，对齐 Linux `task_struct->rt.time_slice`。
 - **关联 GOTCHA**: 无
 
-### DEBT-008 signal_setup_frame 写信号帧不校验栈 VMA → 二次 segfault
-- **维度**: 内存安全　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
+### DEBT-008 signal_setup_frame 写信号帧不校验栈 VMA → 二次 segfault ✅
+- **维度**: 内存安全　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批4,2026-06-25）　**核验**: ✅ 读码 + 冒烟
+- **闭环**: signal_setup_frame(signal.cpp:301)计算 R 后、写帧前加 VMA 校验——`current()->addr_space->vmas().find(R)` 须命中可写 Stack VMA(has_flag Write+Stack),否则 `signal_exec_default(task, sig)` fallback(默认终止)而非写帧。避免深栈收信号 R 越 guard → 写帧中途 PF → 栈损坏 + 原信号 in-flight → 偶现挂死。IF=0 ISR 上下文,vma_lock.irq_guard() no-op 锁(文档临界区)。验证 run-kernel-test 931/0(kernel-mode 不覆盖 user-mode signal_setup_frame)+ make run 冒烟启动到桌面无 panic/无 [SIGNAL] fallback。边界(栈溢出收信号)靠逻辑正确性,留真用户态信号程序端到端 follow-up。详见 `document/notes/2026-06-25-f-cln-b4-debt008-signal-vma.md`。
 - **位置**: `kernel/proc/signal.cpp:265-315`
 - **现象**: `R = user_rsp - pad - 8 - sizeof(SignalFrame)`(~160B) 后写信号帧/trampoline，**不查 R 是否落合法 Stack VMA / 是否越 guard page**。
 - **根因**: 深递归栈近底时收信号 → R 落 guard page 或 VMA 外 → 触发 PF → 投 SIGSEGV，但此刻信号帧写一半、栈已损坏、原信号正投递中 → 语义混乱的「偶现挂死」。Linux 投递前 expand_stack / 查 altstack。
 - **修复建议**: 投递前校验 `[R, user_rsp)` 落 Stack VMA 内；否则改用 sig_altstack 或直接 SIGSEGV 默认终止。
 - **关联 GOTCHA**: #11（PF 硬门控+栈增长，未覆盖信号帧写入）/ #16（sigreturn trampoline，未覆盖）
 
-### DEBT-009 clear_user_mappings 不识别 huge page entry → 误当 PT 页释放
-- **维度**: 内存安全　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
+### DEBT-009 clear_user_mappings 不识别 huge page entry → 误当 PT 页释放 ✅
+- **维度**: 内存安全　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批5,2026-06-25）　**核验**: ✅ 读码
+- **闭环**: 三处加 huge entry 检测(防御,当前 NXE off 无 user huge 不触发):clear_user_mappings(execve.cpp)PDPT 层 1GB + PD 层 2MB、free_subtree(address_space.cpp)递归各层。huge entry 是数据页非页表——原代码下钻解析 huge 内容当 PT + free garbage 物理页 → PMM 错乱。修:遇 huge → kprintf warn + 清零 entry + continue(不下钻不 free)。huge free(buddy order 2MB/1GB)未实现,留真正 huge 支持里程碑(检测到 huge 说明该里程碑漏更新此路径)。验证 run-kernel-test 931/0 + 编译零 warning。关联 GOTCHA#13(direct-map huge split,相关但针对 VMM.map)。详见 `document/notes/2026-06-25-f-cln-b5-debt009-huge-detect.md`。
 - **位置**: `kernel/proc/execve.cpp:81-105`
 - **现象**: 4 层遍历叶子层 `free_page`，中间层也 `free_page`，**全程不检查 `entry.huge`（PS bit）**。
 - **根因**: 用户空间若引入 2MB/1GB huge（mmap/brk 未来可能），huge entry 基址被当 PDPT 表页 free，并向下把 huge 内容当 PT 解析 → free garbage 物理页 → PMM 状态错乱。当前潜伏。
 - **修复建议**: 每层先判 `entry.huge`：huge entry 直接 `free_page(phys_addr)` 并清零，不向下走。`AddressSpace::~AddressSpace` 的 free_subtree 同样需补。
 - **关联 GOTCHA**: #13（huge split 破坏 direct-map，相关但针对 VMM.map）
 
-### DEBT-010 `FDTable` refcount 用 `guard()` 非 `irq_guard`，与 R3 不一致
-- **维度**: 并发/SMP　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
+### DEBT-010 `FDTable` refcount 用 `guard()` 非 `irq_guard`，与 R3 不一致 ✅
+- **维度**: 并发/SMP　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批6,2026-06-25）　**核验**: ✅ -smp2 回归
+- **闭环**: acquire/release 改 `__atomic_*_fetch(&refcount_, 1, ACQ_REL)`(对齐 SharedCwd/SharedSigActions R3),去 `lock_.guard()` + racy `refcount_>0` 守卫(正确生命周期不 underflow)。release 到 0 独占(无并发)读 fds_[]+close(持锁)+delete。alloc/close/get/set 保留 `lock_.guard()`(fds_[] 数组保护,非 refcount;当前 IRQ 不触达 FDTable,未来触达再升 irq_guard)。验证 run-kernel-test 931/0 + host ctest(fd_table/pipe/shell_redirect/shell_write/sys_pipe 全过)+ **-smp 2** ALL PASSED。详见 `document/notes/2026-06-25-f-cln-b6-debt010-fdtable-refcount.md`。
 - **位置**: `kernel/fs/file.cpp:29-54`
 - **现象**: `FDTable::acquire/release` 用 `lock_.guard()`（非 IRQ-safe），对照 SharedCwd/SharedSigActions（F4-M5 R3）已改 `__atomic_*_fetch(ACQ_REL)`。
 - **根因**: 当前 IRQ 路径不碰 FDTable，不立刻死锁。但属「未爆但脆」的同步原语选型不一致 —— 未来任何 IRQ handler 触达 FDTable 即本核持锁重入死锁。
 - **修复建议**: 统一 `irq_guard()`，或像 SharedCwd 把 refcount 改 atomic（单字段独立于 fds_[]，release 到 0 再持锁清理）。
 - **关联 GOTCHA**: 无（R3 范围明确只覆盖 SharedCwd+SharedSigActions）
 
-### DEBT-016 test fixture 忽略 ErrorOr 返回值（32 处，[[nodiscard]] 触发）
-- **维度**: 测试覆盖(D8)　**优先级**: P2　**状态**: 🆕 登记待办(F-QA Q1-2 触发)　**核验**: ✅ -Wunused-result 坐实
+### DEBT-016 test fixture 忽略 ErrorOr 返回值（32 处，[[nodiscard]] 触发）✅
+- **维度**: 测试覆盖(D8)　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批2,2026-06-25）　**核验**: ✅ -Wunused-result 零命中
+- **闭环**: 两套 framework 各加 `ASSERT_OK` 宏（非 void-safe,失败 abort/exit 不 return,区别于 TEST_ASSERT 的 `return;`）：`big_kernel_test.h` 用 QEMU isa-debug-exit(io_outb 0xf4←1),`test_framework.h` 用 `_TEST_ABORT()`(host abort/QEMU hlt)。32 处忽略全包:big_kernel_test 29 处(test_ramdisk 17 mount + test_ext2 系 4 result.ext2->mount + vfs/cwd_stat/file_mmap/page_cache get_page/shell_write/syscall_ext2/ahci_write)+ host 3 处(test_shell_redirect write)。去 `test/CMakeLists.txt:16` 全局 + `kernel/CMakeLists.txt:299` big_kernel_test 的 `-Wno-unused-result`。验证 run-kernel-test 931/0 + host ctest 54/0 + 零 ignoring。详见 `document/notes/2026-06-25-f-cln-b2-debt016-assert-ok.md`。
 - **位置**: `kernel/test/test_ramdisk.cpp`(17 处 mount 忽略) / `test_ext2*`+`test_cwd_stat`/`test_ahci_write`/`test_file_mmap`/`test_shell_write`/`test_syscall_ext2`(~11 处 ext2 mount 忽略) / `kernel/test/test_page_cache.cpp:237`(get_page) / `test/unit/test_shell_redirect.cpp:205-207`(write)。**生产 kernel 代码零忽略**。
 - **现象**: ErrorOr class 加 `[[nodiscard]]`(F-QA Q1-2)后,32 处 test fixture 忽略 ErrorOr 返回值触发 `-Wunused-result`。多为 setup helper 内 `ext2/ramdisk->mount()` 忽略 + 少量 get_page/write。
 - **根因**: test 沿用"setup 忽略错误"习惯。尝试用 `TEST_ASSERT_TRUE` 清,但该宏失败时 `return;`(无值),不能用在返回 `Ramdisk*`/`AhciExt2Pair` 的非 void setup helper → 编译 error。需非 void-safe 的检查原语。
