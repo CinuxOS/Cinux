@@ -156,8 +156,9 @@
 - **修复建议**: quantum 改 per-task（`Task::quantum_remaining`）或 per-CPU，对齐 Linux `task_struct->rt.time_slice`。
 - **关联 GOTCHA**: 无
 
-### DEBT-008 signal_setup_frame 写信号帧不校验栈 VMA → 二次 segfault
-- **维度**: 内存安全　**优先级**: P2　**状态**: 🆕 登记待办　**核验**: ⚠️ 待核验
+### DEBT-008 signal_setup_frame 写信号帧不校验栈 VMA → 二次 segfault ✅
+- **维度**: 内存安全　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批4,2026-06-25）　**核验**: ✅ 读码 + 冒烟
+- **闭环**: signal_setup_frame(signal.cpp:301)计算 R 后、写帧前加 VMA 校验——`current()->addr_space->vmas().find(R)` 须命中可写 Stack VMA(has_flag Write+Stack),否则 `signal_exec_default(task, sig)` fallback(默认终止)而非写帧。避免深栈收信号 R 越 guard → 写帧中途 PF → 栈损坏 + 原信号 in-flight → 偶现挂死。IF=0 ISR 上下文,vma_lock.irq_guard() no-op 锁(文档临界区)。验证 run-kernel-test 931/0(kernel-mode 不覆盖 user-mode signal_setup_frame)+ make run 冒烟启动到桌面无 panic/无 [SIGNAL] fallback。边界(栈溢出收信号)靠逻辑正确性,留真用户态信号程序端到端 follow-up。详见 `document/notes/2026-06-25-f-cln-b4-debt008-signal-vma.md`。
 - **位置**: `kernel/proc/signal.cpp:265-315`
 - **现象**: `R = user_rsp - pad - 8 - sizeof(SignalFrame)`(~160B) 后写信号帧/trampoline，**不查 R 是否落合法 Stack VMA / 是否越 guard page**。
 - **根因**: 深递归栈近底时收信号 → R 落 guard page 或 VMA 外 → 触发 PF → 投 SIGSEGV，但此刻信号帧写一半、栈已损坏、原信号正投递中 → 语义混乱的「偶现挂死」。Linux 投递前 expand_stack / 查 altstack。

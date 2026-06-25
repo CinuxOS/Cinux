@@ -16,7 +16,7 @@
 | 1 | DEBT-015 核实 PathBuf 改堆后 frame-larger-than 残余 + 启用门禁/关债 | ✅ | (本次) | 931/0;sys_dmesg LogEntry[16]→堆,big_kernel 零 frame 命中,门禁 warning 级(GCC 限制 -Werror= 不可行) |
 | 2 | DEBT-016 test framework 加 ASSERT_OK 宏 + 清 32 处忽略 + 去 -Wno-unused-result | ✅ | (本次) | run-kernel-test 931/0 + host ctest 54/0;零 ignoring |
 | 3 | DEBT-018 kMaxCpus 统一单一权威（percpu=8 vs acpi=16）+ static_assert | ✅ | (本次) | 931/0 + -smp2;acpi 改名 kMaxAcpiLapics + static_assert |
-| 4 | DEBT-008 signal_setup_frame 写帧前校验栈 VMA（中风险，信号路径） | ⏳ | | |
+| 4 | DEBT-008 signal_setup_frame 写帧前校验栈 VMA（中风险，信号路径） | ✅ | (本次) | 931/0 + make run 冒烟;校验 fallback signal_exec_default |
 | 5 | DEBT-009 clear_user_mappings + free_subtree 识 huge entry | ⏳ | | |
 | 6 | DEBT-010 FDTable refcount guard()→irq_guard()/atomic 对齐 R3 | ⏳ | | |
 | 7 | DEBT-007 quantum_remaining_ 改 per-task（中风险，调度核心 + -smp2 回归） | ⏳ | | |
