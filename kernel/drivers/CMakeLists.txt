@@ -22,6 +22,13 @@ if(CINUX_GUI)
         ${CMAKE_CURRENT_SOURCE_DIR}/canvas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/mouse/mouse.cpp
     )
+else()
+    # §14: mouse.cpp is GUI-only (PS/2 mouse feeds the GUI event queue).  Non-GUI
+    # builds link mouse_stub.cpp so irq12_stub's reference to mouse_irq12_handler
+    # resolves (no #ifndef in irq_handlers.cpp).
+    target_sources(big_kernel_common PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/mouse/mouse_stub.cpp
+    )
 endif()
 
 # F5-M5 xHCI: USB host controller + reusable PCI MSI-X subsystem.
