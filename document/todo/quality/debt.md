@@ -131,8 +131,9 @@
 
 ## 🟡 Medium
 
-### DEBT-018 `kMaxCpus` 两处定义不一致（同名不同值不同类型）
-- **维度**: 资源配额(D13)　**优先级**: P2　**状态**: 🆕 登记待办（F-QA Q3-1 审计发现）　**核验**: ✅ grep 坐实
+### DEBT-018 `kMaxCpus` 两处定义不一致（同名不同值不同类型）✅
+- **维度**: 资源配额(D13)　**优先级**: P2　**状态**: ✅ 已修（F-CLN 批3,2026-06-25）　**核验**: ✅ grep 坐实改名
+- **闭环**: 两处语义本不同——`cinux::proc::kMaxCpus=8`(运行 CPU 上限,percpu_blocks/idle_tasks/gdt/g_held 用)vs `cinux::drivers::acpi::kMaxCpus=16`(MADT 记录容量,cpu_apic_ids 用)。不同 ns 不撞 ODR 但同名易混。**acpi 那个改名 `kMaxAcpiLapics`**(区分语义:ACPI 可能报 >运行上限的 LAPIC,ap_main 用 proc::kMaxCpus 限 AP 启动)。ap_main.cpp 加 `static_assert(proc::kMaxCpus <= acpi::kMaxAcpiLapics)`(记录容量须 ≥ 运行上限,否则拓扑静默截断)。验证 run-kernel-test 931/0 + **-smp 2** ALL PASSED。详见 `document/notes/2026-06-25-f-cln-b3-debt018-kmaxcpus.md`。
 - **位置**: `kernel/drivers/acpi/acpi.hpp:150`(`constexpr size_t kMaxCpus = 16`) / `kernel/proc/percpu.hpp:28`(`constexpr uint32_t kMaxCpus = 8`)
 - **现象**: `kMaxCpus` 两处定义：acpi=16(size_t)、percpu=8(uint32_t)。数组用不同值——`percpu_blocks[8]`/`idle_tasks_[8]`/`gdt_blocks[8]` 用 8；`cpu_apic_ids[16]` 用 16。`ap_main.cpp:189,260` `cpu < proc::kMaxCpus`(8)保护避免 OOB。
 - **根因**: (1) ACPI 报 >8 CPU 时 AP 静默不启动（丢弃，不报错）；(2) 同名常量两值违反单一定义（ODR 风险，编译期 TU 间可静默选其一）；(3) 类型不一致(size_t vs uint32_t)。当前 QEMU -smp 2 不触发，多核(>8)暴露。
