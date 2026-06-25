@@ -2,6 +2,14 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
+## ✅ F4-followup（SMP 任务迁移竞态修复）— 2026-06-25，feat/smp-migration-fix `68b1913`（待 PR）
+
+> 来源：F-GUI-DECOUPLE 批2（launch_userspace 抽函数）触发 `make run -smp 2` 必现 panic，诊断为预存 SMP bug（批1 内联时序避开，批2 必现；根因 F4-M4 后潜伏，对应"偶现崩溃"痛点）。
+> **根因**：任务跨 CPU 迁移时，旧 CPU `context_switch`（存 task->ctx）与新 CPU（取同一 ctx）并发 → ctx 写花 → ret 跳垃圾 rip → #UD/#BP。F4-M4「pick removes」挡双 CPU 同运行，但漏迁移窗口（旧 CPU save 中、新 CPU 已 restore）。
+> **修复**（对齐 Linux `task_struct->on_cpu`）：Task 加 `on_cpu`（-1=已存/未运行, cpu_id=运行中）+ `context_switch.S` 存完 from 设 -1（x86 store release; ctx@Task+0 → rdi=Task*, on_cpu@96, static_assert）+ `RoundRobin::pick_next` 跳过 on_cpu≠-1 且≠本cpu 的 task（本 cpu 不跳 → 单核 yield `next==prev` return 保持）+ schedule/exit_current/run_first 切入前 claim + build/run_first/setup_ap_idle 初始化。**用 pick 跳过而非 spin**（两 CPU 互 spin 等对方存完会死锁）。
+> **验证**：单核 run-kernel-test 931/0 + `make run -smp 2` 连续 3 次 0 panic（AP1 online + xHCI + USB 正常）。on_cpu 用 `__atomic`（非 Spinlock，不进 lockdep 图），无锁改动。详见 [note](../notes/2026-06-25-f4-followup-smp-migration-race.md)。
+> **阻塞 F-GUI-DECOUPLE 批2**（feat/gui-decouple）：合 main 后回 feat/gui-decouple rebase + pop 批2 + 验证 -smp 2 绿。
+
 ## ✅ F-CLN 债务清理（横切，接 F-QA）— 收官 2026-06-25
 
 > **目标**：开 F10 libc / F7 网络大弧前，把 [debt.md](../todo/quality/debt.md) 的 open 债收敛 + 补全 xHCI/USB 审计盲区（Q3 后合入未审），让新弧在干净地基上推进。
