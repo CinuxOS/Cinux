@@ -23,7 +23,7 @@
 | 3 | execve/launch 压 Linux 初始栈（argc/argv/envp/auxv）：纯函数 `build_initial_stack`（host 单测）+ execve `ElfAuxInfo` out-param + launch_user_program 直接铺栈页（AT_PHDR/PHNUM/PHENT/PAGESZ/ENTRY/UID…/SECURE/RANDOM，rsp%16==0）。sys_execve 替换路径栈铺设留 follow-up | ✅ | helper host 单测 3/3 + run-kernel-test 945/0 + make run 无崩；end-to-end 留批6（`20baf76`）|
 | 4 | 补 musl 所需 syscall：openat/newfstatat/close/read/write/exit_group/mmap/munmap/mprotect/brk/lseek/getpid/getuid…/futex/rt_sig*/clone/wait4（装不下拆 4a/4b）| ✅ | run-kernel-test 950/0(+5) + 全量绿 + test_host 55/0（`8bab7a2`）|
 | 5 | musl 源码编译 + sysroot（configure+make → libc.a/crt1.o），自包含；`-static` 编 hello world | ✅ | tools/musl/ 脚本端到端可复现：build-musl.sh→build-hello.sh→hello 输出+ELF ET_EXEC@0x400000（`ea20c27`）|
-| 6 | 端到端：musl hello world 经 execve+ELF loader+auxv 在 QEMU 跑通，printf 输出；加测试项；notes | ⏳ | run-kernel-test 绿 + hello world 真输出 |
+| 6 | 端到端：musl hello world 经 execve+ELF loader+auxv 在 QEMU 跑通，printf 输出；加测试项；notes | ✅ | harness ring-3 smoke（`CINUX_MUSL_HELLO_SMOKE`）：950 单测 + 串口 `Hello from musl on CinuxOS!`（write 路径）+ exit 0 + smoke PASS；默认 OFF 950/0。printf/stdout FILE segfault 留 follow-up（`aad9736`）|
 
 ### 风险重点
 - **批3 auxv**（碰程序启动核心路径，保现有 shell 不崩）；**批5 musl 源码编译**（host 工具链依赖，最大外部不确定项）；批1 改号是 ABI 破坏性，碰 `user/libc/syscall.h` + shell，全量回归。
