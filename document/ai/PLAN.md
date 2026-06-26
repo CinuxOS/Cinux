@@ -58,7 +58,20 @@
 | L2 | E1000NetDevice adapter（copy RX）+ 生产 arm TX + main 接线 → 真 ping `10.0.2.2`（失败锁死 adapter） | ✅ | 92b82fd | 947/0（+1 test_ping_e1000 真 ping 10.0.2.2 reply）+ host net 5/5 |
 | L3 | notes + ROADMAP F7-M1/M2/M3✅ + 4 解耦 grep 落 `check_net_decoupling` target（负测能抓人） | ✅ | 本次 | check_net_decoupling 绿 + 全量绿 |
 
-> **L2 铁证**：`[net] e1000 ping 10.0.2.2: reply id=0x1234 seq=1` —— ARP resolve + ICMP echo 真往返 SLIRP。**底子优先回报**：栈在 loopback 上证明后,e1000 接入一次过。详见 [L2 note](../notes/2026-06-26-f7-net-l2-e1000-ping.md)。**解耦机器执行**：`cmake --build build --target check_net_decoupling`（4 grep,负测往 kernel/net/ 注 irq.hpp 立刻 FAIL）。**F7-M1/M2/M3 收官**（以太网帧/ARP/IPv4+ICMP）。残留 follow-up：生产 `net::init()`+main 接线+poll driver(内核线程)+shell ping(F7-M6)/中断替 polling(F5-M6 批c)/UDP·TCP(F7-M4/M5)。
+> **L2 铁证**：`[net] e1000 ping 10.0.2.2: reply id=0x1234 seq=1` —— ARP resolve + ICMP echo 真往返 SLIRP。**底子优先回报**：栈在 loopback 上证明后,e1000 接入一次过。详见 [L2 note](../notes/2026-06-26-f7-net-l2-e1000-ping.md)。**解耦机器执行**：`cmake --build build --target check_net_decoupling`（4 grep,负测往 kernel/net/ 注 irq.hpp 立刻 FAIL）。**F7-M1/M2/M3 收官**（以太网帧/ARP/IPv4+ICMP）。
+
+### ✅ shell ping（生产 net 栈 + SYS_ping + shell 命令）— 2026-06-26，本分支续做
+> 把 ping 从"内核测证明"接到 shell。**关键决策：不要常驻 net 线程**——sys_ping 的 send+sti/hlt+poll 循环本身就是 ping 期间的 poll driver（production 开中断，LAPIC tick 唤醒 hlt 驱动 SLIRP）。详见 [shell-ping note](../notes/2026-06-26-f7-net-shell-ping.md)。
+
+| 批 | 范围 | 状态 | Commit | 测试 |
+|----|------|------|--------|------|
+| B1 | 生产 `cinux::net::init()`(建栈+attach e1000 单例,声明 kernel/net/ 实现 drivers/net/)+ `ping()`(sti/hlt 循环)+ stub + main 接线 | ✅ | c0c8ddd | test_production_ping reply id=0xbeef + 948/0 |
+| B2 | `SYS_ping=220` + sys_ping.cpp(调 cinux::net::ping,IP 解包+errno)+ 注册 syscall_table | ✅ | b0c817f | 948/0(syscall 注册编译) |
+| B3 | sys_ping 用户桩 + cmd_ping.cpp(解析 IP+count,循环打 reply)+ shell 注册 + make run 冒烟 | ✅ | 98990a4 | test_syscall_ping rc=0 + 949/0 + make run `[net] L3 stack up` 无 panic |
+
+> **live 交互**：`make run` → Shell → `ping 10.0.2.2`（输出走 GUI 屏,串口捕不到；路径全证：sys_ping handler→reply 内核测 + cmd_ping 编链 + 生产 boot 起栈 + syscall 派发同现有 syscall）。残留：常驻 poll driver(被动收包)/socket 层(F7-M6)/中断(批c)/UDP·TCP。
+
+## 🔄 F-GUI-DECOUPLE（GUI 模块独立化 / 消源码 #ifdef）— 2026-06-25 立项
 
 > **架构**：两轴分离（NetDevice 设备轴 / ProtocolHandler 协议轴）+ FOLD-A（mac 可选 / 设备自决 L2 帧）+ FOLD-B（设备表 kMaxDevs=2 / `on_frame` 透传 `NetDevice&`，栈无 singleton）。e1000 copy adapter **不碰 E1000Controller**；loopback 零拷贝 RX 证明借用通路；virtio 零拷贝 future（`supports_zerocopy()` 诚实声明）。buffer 三红队：UAF = copy-to-retain 契约 / drop = scope_guard 全出口 recycle / 重入 = loopback send 只入队下轮派发。
 
