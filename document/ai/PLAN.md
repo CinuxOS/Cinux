@@ -54,7 +54,7 @@
 | 层 | 范围 | 状态 | Commit | 测试 |
 |----|------|------|--------|------|
 | L0 | netdev 抽象（NetDevice/NetStack/ProtocolHandler）+ Packet 借用 buffer（BufferSink/scope_guard）+ ARP cache + 复用 Cinux-Base（Span/ScopeGuard/internet_checksum） | ✅ | 8ab2569 | host 4/4（dispatch/buffer/arp_cache/checksum）+ 945/0 + 解耦 grep 成立 |
-| L1 | ArpModule + Ipv4Module + IcmpModule + LoopbackDevice → 内核测 ping `127.0.0.1`（确定性，无 SLIRP） | ⏳ | | |
+| L1 | ArpModule + Ipv4Module + IcmpModule + LoopbackDevice → 内核测 ping `127.0.0.1`（确定性，无 SLIRP） | ✅ | 794147f | host net 5/5（+net_arp_module）+ 946/0（+1 test_net loopback ping）|
 | L2 | E1000NetDevice adapter（copy RX）+ 生产 arm TX + main 接线 → 真 ping `10.0.2.2`（失败锁死 adapter） | ⏳ | | |
 | L3 | notes + ROADMAP F7-M1✅ + 4 解耦 CI grep 落 CI | ⏳ | | |
 
