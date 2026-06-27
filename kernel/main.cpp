@@ -260,6 +260,12 @@ extern "C" void kernel_main() {
     cinux::lib::kprintf("[BIG] ===== Scheduler & Init Thread =====\n");
     Scheduler::init();
 
+    // F7 follow-up: start the resident net RX poll-driver kthread (sti/hlt +
+    // NetStack::poll). Must come after the scheduler is up; queued here, it runs
+    // once run_first() begins dispatch. Lets ping() yield (default pump) instead
+    // of sti/hlt-ing inside the syscall (the #DF hazard). No-op if no NIC.
+    cinux::net::start_poll_driver();
+
     auto* init_task =
         TaskBuilder().set_entry(cinux::proc::kernel_init_thread).set_name("kernel_init").build();
     if (init_task != nullptr) {
