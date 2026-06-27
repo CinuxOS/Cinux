@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "kernel/drivers/keyboard/keyboard.hpp"
+#include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/file.hpp"
 #include "kernel/fs/vfs_mount.hpp"
@@ -63,48 +64,26 @@ int64_t sys_read(uint64_t fd, uint64_t buf_virt, uint64_t count, uint64_t, uint6
         return read_result.value();
     }
 
-    // fd=0 (stdin): legacy keyboard read path when no VFS entry is present
+    // fd=0 (stdin): read a cooked line through the console TTY line discipline
+    // (F10-M3). The keyboard IRQ feeds input_char(); we drain read_cooked().
+    // Spin-wait for a line (batch 3 replaces this with a proper block); if
+    // nothing arrives, return 0 like the legacy path so headless tests that
+    // poll stdin don't hang.
     if (fd == 0) {
-        auto*    buf        = reinterpret_cast<char*>(buf_virt);
-        uint64_t read_bytes = 0;
+        auto* buf = reinterpret_cast<char*>(buf_virt);
 
-        while (read_bytes < count) {
-            cinux::drivers::KeyEvent ev;
-
-            if (!cinux::drivers::Keyboard::poll(ev)) {
-                if (read_bytes > 0) {
-                    break;
-                }
-
-                bool got_key = false;
-                for (uint32_t i = 0; i < SPIN_WAIT_ITERS; i++) {
-                    __asm__ volatile("pause");
-                    if (cinux::drivers::Keyboard::poll(ev)) {
-                        got_key = true;
-                        break;
-                    }
-                }
-
-                if (!got_key) {
-                    break;
-                }
-            }
-
-            if (!ev.pressed || ev.ascii == 0) {
-                continue;
-            }
-
-            char ch = (ev.ascii == '\r') ? '\n' : ev.ascii;
-
-            buf[read_bytes] = ch;
-            read_bytes++;
-
-            if (ch == '\n') {
-                break;
+        uint64_t n = cinux::drivers::console_tty().read_cooked(buf, count);
+        if (n > 0) {
+            return static_cast<int64_t>(n);
+        }
+        for (uint32_t i = 0; i < SPIN_WAIT_ITERS; i++) {
+            __asm__ volatile("pause");
+            n = cinux::drivers::console_tty().read_cooked(buf, count);
+            if (n > 0) {
+                return static_cast<int64_t>(n);
             }
         }
-
-        return static_cast<int64_t>(read_bytes);
+        return 0;
     }
 
     // No VFS entry and not a legacy fd -- fail

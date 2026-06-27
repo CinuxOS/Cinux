@@ -12,6 +12,7 @@
 
 #include "hid.hpp"  // HID keycode->ASCII tables + modifier bits (USB keyboard)
 #include "kernel/arch/x86_64/io.hpp"
+#include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/lib/kprintf.hpp"
 #include "kernel/proc/sync.hpp"
 
@@ -126,9 +127,9 @@ bool Keyboard::shift_held_ = false;
 bool Keyboard::ctrl_held_  = false;
 bool Keyboard::alt_held_   = false;
 
-bool    Keyboard::usb_primary_      = false;
-uint8_t Keyboard::usb_prev_keys_[6] = {};
-Keyboard::KeyListener Keyboard::key_listener_ = nullptr;
+bool                  Keyboard::usb_primary_      = false;
+uint8_t               Keyboard::usb_prev_keys_[6] = {};
+Keyboard::KeyListener Keyboard::key_listener_     = nullptr;
 
 // ============================================================
 // Internal helpers
@@ -323,6 +324,15 @@ void Keyboard::dispatch_key(uint8_t code, char ascii, bool pressed, bool shift, 
     // (CODING-TASTE §14).
     if (key_listener_ != nullptr) {
         key_listener_(ev);
+    }
+
+    // F10-M3 batch 2: feed the console TTY line discipline (stdin). Echo +
+    // canonical editing happen here; sys_read fd==0 drains the cooked line.
+    // The Backspace key arrives as ^H (VERASE, set in console_tty_init) and
+    // Enter already as '\n' from the scancode table.
+    if (pressed && ascii != 0) {
+        char c = (ascii == '\r') ? '\n' : ascii;
+        console_tty().input_char(c);
     }
 }
 

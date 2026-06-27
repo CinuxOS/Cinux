@@ -54,6 +54,7 @@
 #include "kernel/drivers/net/e1000_init.hpp"
 #include "kernel/drivers/pci/pci.hpp"
 #include "kernel/drivers/pit/pit.hpp"
+#include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/drivers/video/console.hpp"
 #include "kernel/drivers/video/font.hpp"
 #include "kernel/drivers/video/framebuffer.hpp"
@@ -180,6 +181,10 @@ extern "C" void kernel_main() {
     console.init(fb, font, 0x00FFFFFF, 0x00000000);
     cinux::lib::kprintf_register_sink(Console::console_sink_adapter, &console);
     cinux::lib::kprintf("[BIG] Console initialised -- dual output active.\n");
+
+    // F10-M3 batch 2: wire the console TTY (stdin line discipline + echo sink)
+    // before the keyboard starts delivering IRQs.
+    cinux::drivers::console_tty_init();
 
     // Step 15b: hand the framebuffer + console off to the GUI (canvas + window
     // manager init; console detached so routine logs stop overlaying the
