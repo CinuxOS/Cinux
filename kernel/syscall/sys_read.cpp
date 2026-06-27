@@ -10,7 +10,6 @@
 
 #include <stdint.h>
 
-#include "kernel/drivers/keyboard/keyboard.hpp"
 #include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/file.hpp"
@@ -18,13 +17,6 @@
 #include "kernel/mm/page_cache.hpp"
 
 namespace cinux::syscall {
-
-namespace {
-
-/// Maximum iterations to spin-wait for a key before returning 0
-constexpr uint32_t SPIN_WAIT_ITERS = 1'000'000;
-
-}  // anonymous namespace
 
 int64_t sys_read(uint64_t fd, uint64_t buf_virt, uint64_t count, uint64_t, uint64_t, uint64_t) {
     if (buf_virt == 0) {
@@ -65,25 +57,12 @@ int64_t sys_read(uint64_t fd, uint64_t buf_virt, uint64_t count, uint64_t, uint6
     }
 
     // fd=0 (stdin): read a cooked line through the console TTY line discipline
-    // (F10-M3). The keyboard IRQ feeds input_char(); we drain read_cooked().
-    // Spin-wait for a line (batch 3 replaces this with a proper block); if
-    // nothing arrives, return 0 like the legacy path so headless tests that
-    // poll stdin don't hang.
+    // (F10-M3). console_tty_read() blocks until a line is committed or EOF
+    // (^D on empty); the keyboard IRQ feeds the line discipline and wakes the
+    // blocked reader. Replaces the legacy keyboard busy-wait.
     if (fd == 0) {
         auto* buf = reinterpret_cast<char*>(buf_virt);
-
-        uint64_t n = cinux::drivers::console_tty().read_cooked(buf, count);
-        if (n > 0) {
-            return static_cast<int64_t>(n);
-        }
-        for (uint32_t i = 0; i < SPIN_WAIT_ITERS; i++) {
-            __asm__ volatile("pause");
-            n = cinux::drivers::console_tty().read_cooked(buf, count);
-            if (n > 0) {
-                return static_cast<int64_t>(n);
-            }
-        }
-        return 0;
+        return static_cast<int64_t>(cinux::drivers::console_tty_read(buf, count));
     }
 
     // No VFS entry and not a legacy fd -- fail

@@ -46,6 +46,7 @@ TTY::TTY()
       cooked_tail_(0),
       cooked_full_(false),
       pending_signal_(TtySignal::kNone),
+      eof_pending_(false),
       echo_fn_(nullptr),
       echo_ctx_(nullptr) {
     make_default_termios(termios_);
@@ -122,6 +123,7 @@ InputResult TTY::input_char(char c) {
             // VEOF on an empty line -> EOF; otherwise commit what's buffered
             // (without a trailing newline).
             if (line_len_ == 0) {
+                eof_pending_ = true;
                 return InputResult::kEof;
             }
             commit_line();
@@ -185,6 +187,12 @@ TtySignal TTY::pending_signal() const {
     return pending_signal_;
 }
 
+bool TTY::take_eof() {
+    bool was     = eof_pending_;
+    eof_pending_ = false;
+    return was;
+}
+
 const Termios& TTY::termios() const {
     return termios_;
 }
@@ -194,6 +202,7 @@ void TTY::set_termios(const Termios& t) {
     // A termios change can invalidate the line being edited.
     line_len_       = 0;
     pending_signal_ = TtySignal::kNone;
+    eof_pending_    = false;
 }
 
 }  // namespace cinux::drivers

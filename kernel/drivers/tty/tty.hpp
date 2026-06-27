@@ -104,6 +104,11 @@ public:
     /// in ~ICANON).  Returns the count copied; 0 if nothing is ready.
     size_t read_cooked(char* buf, size_t maxlen);
 
+    /// Consume a pending EOF (VEOF/^D on an empty line).  Returns true once per
+    /// EOF so the caller (sys_read) can return 0 to the application exactly
+    /// once, distinct from "no line yet" (which blocks).
+    bool take_eof();
+
     /// Signal requested by the most recent kSignal input_char().  Cleared on
     /// read so a signal is delivered once.
     TtySignal pending_signal() const;
@@ -133,6 +138,7 @@ private:
     bool   cooked_full_;
 
     TtySignal pending_signal_;
+    bool      eof_pending_;  ///< VEOF on an empty line -- next read returns 0
 
     void (*echo_fn_)(char c, void* ctx);
     void* echo_ctx_;

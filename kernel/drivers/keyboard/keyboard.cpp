@@ -332,7 +332,7 @@ void Keyboard::dispatch_key(uint8_t code, char ascii, bool pressed, bool shift, 
     // Enter already as '\n' from the scancode table.
     if (pressed && ascii != 0) {
         char c = (ascii == '\r') ? '\n' : ascii;
-        console_tty().input_char(c);
+        console_tty_input(c);  // F10-M3 batch 3: line discipline + wake reader
     }
 }
 

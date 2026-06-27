@@ -114,10 +114,12 @@ int main() {
         CHECK_EQ(t.read_cooked(buf, sizeof(buf)), static_cast<size_t>(0));  // no line
     }
 
-    // Test 5: ^D on an empty line -> EOF.
+    // Test 5: ^D on an empty line -> EOF; take_eof() signals it once.
     {
         TTY t;
         CHECK_EQ(t.input_char(kCharEof), InputResult::kEof);
+        CHECK(t.take_eof());
+        CHECK(!t.take_eof());  // consumed -- EOF delivered exactly once
     }
 
     // Test 6: ^D after input commits the line WITHOUT a trailing newline.

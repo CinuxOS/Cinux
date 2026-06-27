@@ -22,4 +22,14 @@ TTY& console_tty();
 /// once after kprintf/Console are up and before keyboard interrupts fire.
 void console_tty_init();
 
+/// Read a cooked line from stdin.  Blocks (sleeps the caller) until the line
+/// discipline commits a line or EOF (^D on an empty line).  Returns the byte
+/// count, or 0 on EOF.  Replaces the legacy keyboard busy-wait.
+size_t console_tty_read(char* buf, size_t len);
+
+/// Feed one keyboard byte to the line discipline (echo + editing + cooked
+/// buffer).  Called from the keyboard IRQ handler; wakes a blocked reader when
+/// a line or EOF is committed.
+void console_tty_input(char c);
+
 }  // namespace cinux::drivers
