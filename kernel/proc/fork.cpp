@@ -101,6 +101,43 @@ void copy_page_table_level(uint64_t src_phys, uint64_t dst_phys, int level) {
     }
 }
 
+static bool copied_stack_contains(uint64_t value, uint64_t start, uint64_t top) {
+    return value >= start && value < top;
+}
+
+static uint64_t relocate_copied_stack_addr(uint64_t value, uint64_t parent_stack_start,
+                                           uint64_t parent_stack_top, uint64_t child_stack_start) {
+    if (!copied_stack_contains(value, parent_stack_start, parent_stack_top)) {
+        return value;
+    }
+    return child_stack_start + (value - parent_stack_start);
+}
+
+void prepare_copied_kernel_stack_context(Task* child, uint64_t parent_stack_start,
+                                         uint64_t parent_stack_top, uint64_t child_stack_start,
+                                         uint64_t current_rbp) {
+    child->ctx.rsp = relocate_copied_stack_addr(current_rbp + sizeof(uint64_t), parent_stack_start,
+                                                parent_stack_top, child_stack_start);
+    child->ctx.rbp =
+        relocate_copied_stack_addr(*reinterpret_cast<uint64_t*>(current_rbp), parent_stack_start,
+                                   parent_stack_top, child_stack_start);
+    child->ctx.rip = reinterpret_cast<uint64_t>(fork_child_trampoline);
+
+    uint64_t frame = current_rbp;
+    while (copied_stack_contains(frame, parent_stack_start, parent_stack_top)) {
+        uint64_t next        = *reinterpret_cast<uint64_t*>(frame);
+        uint64_t child_frame = relocate_copied_stack_addr(frame, parent_stack_start,
+                                                          parent_stack_top, child_stack_start);
+        *reinterpret_cast<uint64_t*>(child_frame) = relocate_copied_stack_addr(
+            next, parent_stack_start, parent_stack_top, child_stack_start);
+
+        if (next <= frame || !copied_stack_contains(next, parent_stack_start, parent_stack_top)) {
+            break;
+        }
+        frame = next;
+    }
+}
+
 // ============================================================
 // fork implementation
 // ============================================================
@@ -218,9 +255,8 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int fork(PidAllocat
     child->kernel_stack_top        = child_stack_virt + stack_size;
     child->kernel_stack_guard_page = child_guard_virt;
 
-    child->ctx.rsp = (current_rbp + 8) - current_rsp + child_stack_start;
-    child->ctx.rbp = *reinterpret_cast<uint64_t*>(current_rbp);
-    child->ctx.rip = reinterpret_cast<uint64_t>(fork_child_trampoline);
+    prepare_copied_kernel_stack_context(child, current_rsp, current_rsp + full_stack_used,
+                                        child_stack_start, current_rbp);
 
     // CoW page table handling
     if (parent->addr_space != nullptr) {

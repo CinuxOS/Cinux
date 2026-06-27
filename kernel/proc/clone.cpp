@@ -57,11 +57,11 @@ constexpr uint64_t kCloneParentSettid  = 0x00100000;
 constexpr uint64_t kCloneChildCleartid = 0x00200000;
 constexpr uint64_t kCloneChildSettid   = 0x01000000;
 
-// Size of the syscall_entry pt_regs frame (12 qwords): user_rsp..rbp.  It sits
-// at the very top of the kernel stack ([kernel_stack_top-96, kernel_stack_top))
+// Size of the syscall_entry pt_regs frame (16 qwords): user_rsp..rbp.  It sits
+// at the very top of the kernel stack ([kernel_stack_top-128, kernel_stack_top))
 // because syscall_entry loads RSP from %gs:0 == kernel_stack_top.  clone uses
 // this to patch the child's user-RSP slot.
-constexpr uint64_t kSyscallFrameSize = 96;
+constexpr uint64_t kSyscallFrameSize = 128;
 
 /**
  * @brief Copy the parent's CoW page tables + VMA records into @p child.
@@ -259,12 +259,11 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int clone(
 
     // The child resumes via the trampoline (sets rax=0) and unwinds the copied
     // stack frames back out through syscall_entry, exactly like fork.
-    child->ctx.rsp = (current_rbp + 8) - current_rsp + child_stack_start;
-    child->ctx.rbp = *reinterpret_cast<uint64_t*>(current_rbp);
-    child->ctx.rip = reinterpret_cast<uint64_t>(fork_child_trampoline);
+    prepare_copied_kernel_stack_context(child, current_rsp, current_rsp + full_stack_used,
+                                        child_stack_start, current_rbp);
 
     // ---- CRUX: patch the child's user-RSP to the provided thread stack ----
-    // The syscall pt_regs frame is at [kernel_stack_top-96, kernel_stack_top);
+    // The syscall pt_regs frame is at [kernel_stack_top-kSyscallFrameSize, kernel_stack_top);
     // its first slot (offset 0) is user_rsp.  Overwrite it so the child returns
     // to user space on the caller-supplied stack instead of the parent's.
     if (stack != 0) {
