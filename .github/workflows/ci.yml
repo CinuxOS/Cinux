@@ -102,16 +102,17 @@ jobs:
           cmake --build build -j$(nproc)
           cmake --build build -j$(nproc)
 
-      - name: Run kernel tests
+      - name: Run kernel tests (single-CPU + -smp 2)
         working-directory: build
-        # timeout 180 fails fast on a panic-loop/deadlock hang (normal run is
-        # <60s); tee captures the full QEMU serial output to serial.log so the
-        # next step can upload it as an artifact for post-mortem (kprintf /
-        # panic / backtrace / memstats). pipefail propagates the test exit code
-        # through tee.
+        # F-VERIFY: run-kernel-test-all runs the suite under single-CPU THEN
+        # -smp 2 in one target, so CI can't forget the SMP variant (the 47/47
+        # SMP-空转 blind spot was a process gap, not just code). Either leg
+        # failing fails the build (wrapper maps isa-debug-exit). timeout 300
+        # for two QEMU runs (each <60s normal). tee captures both legs to
+        # serial.log for post-mortem; pipefail propagates the exit code.
         run: |
           set -o pipefail
-          timeout 180 make run-kernel-test 2>&1 | tee serial.log
+          timeout 300 make run-kernel-test-all 2>&1 | tee serial.log
 
       - name: Check test count did not regress (F-QA Q1-4)
         # F-QA Q1-4: fail if fewer tests than baseline ran (silent test loss).
