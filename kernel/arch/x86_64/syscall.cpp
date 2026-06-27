@@ -15,7 +15,6 @@
 #include "kernel/arch/x86_64/gdt.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/lib/kprintf.hpp"
-#include "kernel/proc/scheduler.hpp"  // F10 shell-launch diagnostic: Scheduler::current()
 #include "kernel/proc/signal.hpp"
 #include "kernel/syscall/sys_arch_prctl.hpp"
 #include "kernel/syscall/sys_brk.hpp"
@@ -209,14 +208,6 @@ extern "C" int64_t syscall_dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint6
     }
 
     int64_t ret = fn(a1, a2, a3, a4, a5, a6);
-    // F10 shell-launch SMP-race diagnostic: trace fork's return value as seen
-    // by whoever unwinds through here (parent normally; child via the copied
-    // stack). The child must see ret==0.
-    if (nr == static_cast<uint64_t>(cinux::syscall::SyscallNr::SYS_fork)) {
-        auto* t = cinux::proc::Scheduler::current();
-        cinux::lib::kprintf("[FORK] dispatch ret=%lld tid=%lu\n", static_cast<long long>(ret),
-                            t ? t->tid : 0);
-    }
     // F3-M1 batch 2: deliver one pending signal before returning to user.
     cinux::proc::signal_check_and_deliver();
     return ret;

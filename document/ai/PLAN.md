@@ -29,6 +29,17 @@
 - **批3 auxv**（碰程序启动核心路径，保现有 shell 不崩）；**批5 musl 源码编译**（host 工具链依赖，最大外部不确定项）；批1 改号是 ABI 破坏性，碰 `user/libc/syscall.h` + shell，全量回归。
 - 架构契合：A.6 禁异常/ErrorOr（内核侧 ErrorOr，仅 trap 入口翻 -errno，批1/4 强化翻译边界）；A 子模块边界（musl 外部库/独立 sysroot，不进 kernel/）；对齐 Linux（musl 强制全树 Linux ABI，顺清 chdir 撞号等历史债）。
 
+### ✅ F10-M1 follow-up（shell 启动 musl + SMP fork 竞态修复）— 2026-06-27，本分支续做
+
+> 接批6：GUI shell 敲 /path 启动 musl 程序（fork+execve+waitpid，标准 shell fallback）。**两个根因**：
+> 1. **SMP CoW 写穿透竞态**（主因）：`copy_page_table_level`（fork.cpp/clone.cpp 共用）把**父进程在用 PTE** 改 writable→CoW 后**全程不刷 TLB** → 父 CPU 缓存陈旧 writable 项 → fork 返回用户态后父写穿透到共享物理页 → 污染子的 CoW 副本。单 CPU 稳（下次 context_switch 重载 cr3 刷 TLB）；-smp 2 父不切地址空间→陈旧 TLB 一直在→炸。6-agent workflow 对抗确认（mapcount 已原子；handle_cow_fault 对 fork 正确，无需改）。
+> 2. **syscall_entry sysretq 不恢复用户 RBP**（pre-existing ABI 违规，复现器撞出）：退出恢复 RBX(frame+80) 漏 RBP(frame+88)，RBP 是 callee-saved 必须跨 syscall 保留；任何用帧指针跨 syscall 的用户码（musl 编译产物/手写 sys_fork）返后 RBP 垃圾 segfault。
+>
+> **修**：fork.cpp L279 + clone.cpp L115 CoW 遍历后 `flush_tlb_all()`（局部刷足够：fork IF=0 父不可迁移，子 cr3 全新 clean）；syscall.S 退出 RBX 后加 `movq 88(%rsp),%rbp`。清 syscall.cpp 的 `[FORK] dispatch` 诊断打印。
+> **复现器** `tools/musl/forktest.c`（裸 SYS_fork(57) 循环 = shell 精确路径；父 post-fork 写共享 CoW 全局、子读；races 计数走串口；装成 /hello 让 ring-3 smoke 在 -smp 2 起）。**实证**：全修 ITERS=1 -smp 2 **3/3 races=0 PASS**；未修 CoW run1 **races=1**（偶发，合 note「偶发」）。
+> **残留 follow-up**：`ITERS>=2` fork#2 父 rbp 腐蚀 segfault（rbp 在用户态被腐，非信号/非 PF handler/非 syscall 恢复；触发与 CoW fault+reap 后再 fork 相关；**不影响单 fork = shell 启动 /hello 路径**），登记待单独排查。
+> **验证**：默认 run-kernel-test **954/0** + run-kernel-test-smp **954/0**（无回归）+ forktest races=0。详见 [note](../notes/2026-06-27-f10-smp-cow-tlb-flush-fix.md)。
+
 ## ✅ F9 安全机制（NX/SMEP/SMAP + ASLR + UID/GID + Canary）— 收官 2026-06-26（PR#38 d06c842，942/0）
 
 > Feature 域里程碑（开 F10 用户态运行时大弧前）。目标：CPU 硬件级保护（NX/SMEP/SMAP）+ 地址随机化（ASLR）+ 进程凭证（UID/GID）+ 栈溢出保护（Canary），为 F10 libc/ELF/TTY 铺安全地基（**F9 NXE 是 F10 硬前置**）。来源：用户决策「干掉 F9」+ memory `f4-current-focus`（F9 为 F10 前置）。范围：用户拍板 **M1-M4 全做**（文件权限 check_permission 与 F6 VFS 强耦合，仍建议留 F6）。分支 `feat/f9-security`（从干净 main `8be32d4`）。

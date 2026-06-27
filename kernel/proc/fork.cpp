@@ -222,18 +222,6 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int fork(PidAllocat
     child->ctx.rbp = *reinterpret_cast<uint64_t*>(current_rbp);
     child->ctx.rip = reinterpret_cast<uint64_t>(fork_child_trampoline);
 
-    // F10 shell-launch SMP-race diagnostic: the child unwinds from
-    // fork_child_trampoline through the return address at ctx.rsp.  Dump it so
-    // we can see if the child resumes at the right place (fork()'s caller).
-    {
-        uint64_t ret_addr = *reinterpret_cast<uint64_t*>(child->ctx.rsp);
-        cinux::lib::kprintf(
-            "[FORK] child tid=%lu ctx.rip=%p ctx.rsp=%p retaddr=%p (trampoline=%p)\n",
-            static_cast<unsigned long>(child->tid), reinterpret_cast<void*>(child->ctx.rip),
-            reinterpret_cast<void*>(child->ctx.rsp), reinterpret_cast<void*>(ret_addr),
-            reinterpret_cast<void*>(fork_child_trampoline));
-    }
-
     // CoW page table handling
     if (parent->addr_space != nullptr) {
         child->addr_space = new cinux::mm::AddressSpace();
@@ -274,6 +262,21 @@ __attribute__((optimize("no-omit-frame-pointer"), noinline)) int fork(PidAllocat
             child_pml4_table[i].raw = new_page | FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER;
             copy_page_table_level(parent_pml4_table[i].phys_addr(), new_page, 3);
         }
+
+        // F10 SMP fix: copy_page_table_level() just cleared FLAG_WRITABLE and set
+        // FLAG_COW on the PARENT's own live PTEs -- this CPU still has the parent's
+        // cr3 loaded, and fork() runs with IF=0 (SFMASK clears IF on syscall entry,
+        // no sti before dispatch) so the parent cannot migrate or be preempted. Until
+        // we invalidate the TLB the parent CPU keeps the stale WRITABLE entries and
+        // its next user-mode write goes THROUGH to the now-shared physical page,
+        // silently corrupting the child's later CoW copy. That is the SMP fork race;
+        // single-CPU was stable only because the next context switch reloads cr3
+        // (flushing the TLB) before the parent writes again. A LOCAL flush suffices
+        // here: only this CPU holds the parent's cr3, and the child's distinct cr3
+        // has never been loaded (clean TLB on first run). A cross-CPU shootdown
+        // (needed for CLONE_VM threads sharing one address space) is a separate
+        // follow-up, not required for the fork path. See note + [[f10-shell-launch-smp-fork-race]].
+        flush_tlb_all();
 
         // F2-M2 batch 4: clone the parent's VMA records into the child so the
         // bookkeeping matches the CoW page tables.  File backings (Inode*) are

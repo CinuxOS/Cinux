@@ -105,6 +105,15 @@ void cow_clone_address_space(Task* parent, Task* child) {
         copy_page_table_level(parent_pml4_table[i].phys_addr(), new_page, 3);
     }
 
+    // F10 SMP fix: copy_page_table_level() CoW-marked the PARENT's live PTEs
+    // (writable -> read-only + FLAG_COW). Flush the parent CPU's stale WRITABLE
+    // TLB entries so the parent's next write faults (CoW) instead of writing
+    // through to the now-shared page. clone() runs at IF=0 and only this CPU
+    // holds the parent's cr3, so a local flush is sufficient (the child's fresh
+    // cr3 is clean on first run). Same fix as fork(); see note +
+    // [[f10-shell-launch-smp-fork-race]].
+    flush_tlb_all();
+
     // Clone VMA records so bookkeeping matches the CoW page tables.
     for (cinux::mm::VMA* v = parent->addr_space->vmas().first(); v != nullptr;
          v                 = parent->addr_space->vmas().next(v)) {
