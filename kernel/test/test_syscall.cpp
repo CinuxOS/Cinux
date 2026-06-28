@@ -365,18 +365,16 @@ void test_sys_ioctl_returns_enotty() {
 }
 
 void test_sys_clock_gettime_fills_timespec() {
-    struct {
-        int64_t tv_sec;
-        int64_t tv_nsec;
-    } ts = {-1, -1};
-    int64_t r =
-        sys_clock_gettime(1 /*CLOCK_MONOTONIC*/, reinterpret_cast<uint64_t>(&ts), 0, 0, 0, 0);
+    // P0e: do_clock_gettime_kernel fills a kernel ktimespec.
+    cinux::syscall::ktimespec ts{-1, -1};
+    int64_t r = cinux::syscall::do_clock_gettime_kernel(1 /*CLOCK_MONOTONIC*/, &ts);
     TEST_ASSERT_EQ(r, 0);
     TEST_ASSERT_TRUE(ts.tv_sec >= 0);
 }
 
 void test_sys_clock_gettime_bad_clock_rejected() {
-    int64_t r = sys_clock_gettime(99, 0x1000, 0, 0, 0, 0);
+    cinux::syscall::ktimespec ts;
+    int64_t                   r = cinux::syscall::do_clock_gettime_kernel(99, &ts);
     TEST_ASSERT_LT(r, 0);
 }
 

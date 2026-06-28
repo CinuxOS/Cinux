@@ -508,18 +508,17 @@ void test_getdents_reads_entries_in_order() {
     auto buf_addr = reinterpret_cast<uint64_t>(buf);
 
     // Entry 0: "."
-    int64_t n0 =
-        cinux::syscall::sys_getdents(static_cast<uint64_t>(fd), buf_addr, sizeof(buf), 0, 0, 0);
+    int64_t n0 = cinux::syscall::do_getdents_kernel(static_cast<int>(fd), buf, sizeof(buf));
     TEST_ASSERT_GT(n0, 0);
     TEST_ASSERT_TRUE(memcmp(buf, ".", 2) == 0);
 
     // Entry 1: ".."
-    n0 = cinux::syscall::sys_getdents(static_cast<uint64_t>(fd), buf_addr, sizeof(buf), 0, 0, 0);
+    n0 = cinux::syscall::do_getdents_kernel(static_cast<int>(fd), buf, sizeof(buf));
     TEST_ASSERT_GT(n0, 0);
     TEST_ASSERT_TRUE(memcmp(buf, "..", 3) == 0);
 
     // Entry 2+: actual files from the ramdisk -- at least one must exist
-    n0 = cinux::syscall::sys_getdents(static_cast<uint64_t>(fd), buf_addr, sizeof(buf), 0, 0, 0);
+    n0 = cinux::syscall::do_getdents_kernel(static_cast<int>(fd), buf, sizeof(buf));
     TEST_ASSERT_GT(n0, 0);
 
     cinux::syscall::sys_close(static_cast<uint64_t>(fd), 0, 0, 0, 0, 0);
@@ -539,8 +538,7 @@ void test_getdents_returns_zero_when_exhausted() {
 
     // Drain all entries ("." , "..", and all ramdisk files)
     for (int i = 0; i < 128; ++i) {
-        int64_t n =
-            cinux::syscall::sys_getdents(static_cast<uint64_t>(fd), buf_addr, sizeof(buf), 0, 0, 0);
+        int64_t n = cinux::syscall::do_getdents_kernel(static_cast<int>(fd), buf, sizeof(buf));
         if (n == 0) {
             // Reached end of directory -- success
             cinux::syscall::sys_close(static_cast<uint64_t>(fd), 0, 0, 0, 0, 0);
@@ -573,8 +571,7 @@ void test_getdents_after_close_returns_error() {
 
     char    buf[64]  = {};
     auto    buf_addr = reinterpret_cast<uint64_t>(buf);
-    int64_t n =
-        cinux::syscall::sys_getdents(static_cast<uint64_t>(fd), buf_addr, sizeof(buf), 0, 0, 0);
+    int64_t n        = cinux::syscall::do_getdents_kernel(static_cast<int>(fd), buf, sizeof(buf));
     TEST_ASSERT_LT(n, 0);
 
     teardown_vfs(rd);

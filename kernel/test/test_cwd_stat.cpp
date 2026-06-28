@@ -344,7 +344,7 @@ void test_chdir_then_getcwd() {
         cwd_buf[i] = 0;
     auto buf_addr = reinterpret_cast<uint64_t>(cwd_buf);
 
-    int64_t n = cinux::syscall::sys_getcwd(buf_addr, sizeof(cwd_buf), 0, 0, 0, 0);
+    int64_t n = cinux::syscall::do_getcwd_kernel(cwd_buf, sizeof(cwd_buf));
     TEST_ASSERT_GT(n, 0);
     TEST_ASSERT_TRUE(strcmp(cwd_buf, dir_path) == 0);
 
@@ -791,7 +791,7 @@ void test_pwd_command_outputs_cwd() {
         cwd_buf[i] = 0;
     auto buf_addr = reinterpret_cast<uint64_t>(cwd_buf);
 
-    int64_t n = cinux::syscall::sys_getcwd(buf_addr, sizeof(cwd_buf), 0, 0, 0, 0);
+    int64_t n = cinux::syscall::do_getcwd_kernel(cwd_buf, sizeof(cwd_buf));
     TEST_ASSERT_GT(n, 0);
     TEST_ASSERT_TRUE(k_strcmp(cwd_buf, dir_path) == 0);
 
