@@ -16,7 +16,7 @@
 
 > 风险:accessor 回归(~30 caller,host 路径不变 + ring-3 smoke 守)/ PF 改动影响所有 #PF(查表 miss 即原逻辑)/ sort 错→search miss→panic(批1 host 单测先证)/ fixup 漏 clac→AC 泄漏(批2 反汇编审)/ RSVD 构造环境敏感(三方案降级)。批2 故意不接线 PF → accessor 回归与 #PF 改动隔离,可二分。
 
-## 🔄 F10-M3 TTY + ioctl（Phase 1）— 2026-06-27 立项
+## ✅ F10-M3 TTY + ioctl（Phase 1 收官 2026-06-29）— 立项 2026-06-27
 
 > 分支 `feat/f10-tty-dyn`（从干净 main `295d536`）。接 F10-M1（musl 静态移植 ✅ PR#42）。用户拍板：**先 TTY+ioctl，同分支续叠 M2 动态链接**；按需 + libc 解耦（PTY/`/dev/*` 留 F6 DevFS）。
 > **前置修 `9fba65b`**：handle_pf CoW 解析松 U 位门控——内核态写 CoW 用户页（syscall 直接解引用，如 waitpid 写 `*status`）不再 panic。run-kernel-test-all 955/0 + -smp2 AP 回读 PASS，零回归。（ring-3 自动回归未成：内核写 CoW 的 mmap 页不 fault、栈页才 fault，差异未解；待 GUI `make run` 复验。）
@@ -34,7 +34,7 @@
 | 3 | stdin 阻塞读：`sys_read fd==0` 改读 TTY cooked line_buf + 无行 block（F3 `prepare_to_wait`/`schedule_blocked`）+ 键盘 IRQ 唤醒。**修 musl 误 EOF** | ✅ | run-kernel-test-all 两 leg（`35cb419`，经 SMAP saga 合 main） |
 | 4 | ioctl 实命令：TCGETS/TCSETS/TIOCGWINSZon fd 0/1/2（copy_to/from_user extable SMAP 安全）+ tty.hpp ioctl UAPI + Winsize 80×25。**解锁 musl/glibc 行缓冲** | ✅ | run-kernel-test-all 964/0 两 leg + AP readback + ctest 62/0（本次） |
 | 5 | 信号生成：Ctrl+C→SIGINT / Ctrl+Z→SIGTSTP / Ctrl+\\→SIGQUIT 经 killpg 投前台组 + Ctrl+D→EOF。**+ console_tty 类化(ConsoleTty)**（用户反馈:有 mutable 共享状态该类化，批6 扫同类） | ✅ | run-kernel-test-all 967/0 两 leg + AP readback + ctest 62/0（+3 测 Ctrl+C/Ctrl+Z→killpg + TIOCSPGRP） |
-| 6 | 收尾 + 交织 F-VERIFY：ROADMAP F10-M3 Phase1 ✅ + notes + sys_read/write/ioctl/keyboard 的 host 镜像副本→链真码（批2 微增量，单独 commit）。**🚩TTY 绿 checkpoint：决定 PR 还是续叠 M2** | ⏳ | run-kernel-test-all + test_host 全绿 |
+| 6 | 收尾：ROADMAP F10-M3 Phase1 ✅ + PLAN 收官。F-VERIFY 交织（host 镜像副本链真码）推迟留 F-VERIFY M2；全 kernel 伪单例类化评估登记独立 follow-up（13 候选文件，console_tty 批5 已类化，详见 memory `classify-c-style-singleton-with-mutable-state`）。**🚩TTY Phase1 收官：feat/f10-m3-tty 待 PR** | ✅ | docs-only（run-kernel-test-all 967/0 + ctest 62/0 已验） |
 
 ### 风险
 - 批 3 阻塞读的 IRQ 唤醒（模式同 pipe write 唤醒 read，waitpid/pipe 已验）；兜底先做 cooked-buffer 非阻塞读（有行返行、无行不返假 EOF），阻塞作子步叠加。
