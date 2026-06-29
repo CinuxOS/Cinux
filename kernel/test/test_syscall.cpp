@@ -358,10 +358,25 @@ void test_sys_writev_zero_iovcnt_rejected() {
     TEST_ASSERT_LT(r, 0);
 }
 
-void test_sys_ioctl_returns_enotty() {
-    // Any ioctl (incl. musl's TIOCGWINSZ probe) returns -ENOTTY.
-    int64_t r = sys_ioctl(1, 0x5413, 0x1000, 0, 0, 0);
+void test_sys_ioctl_non_tty_fd_enotty() {
+    // A non-console fd (99) is not the console TTY -> -ENOTTY (not a tty).
+    int64_t r = sys_ioctl(99, 0x5401 /*TCGETS*/, 0x1000, 0, 0, 0);
     TEST_ASSERT_EQ(r, static_cast<int64_t>(-cinux::kEnotty));
+}
+
+void test_sys_ioctl_unknown_cmd_enotty() {
+    // An unknown request on the console TTY (fd 1) -> -ENOTTY.
+    int64_t r = sys_ioctl(1, 0x1234 /*unknown*/, 0x1000, 0, 0, 0);
+    TEST_ASSERT_EQ(r, static_cast<int64_t>(-cinux::kEnotty));
+}
+
+void test_sys_ioctl_tcgets_unmapped_efault() {
+    // TCGETS routes through copy_to_user (the F-EXTABLE accessor). An unmapped
+    // user pointer (0x7000000000 -- access_ok passes, the page faults on copy)
+    // hits the extable fixup and returns -EFAULT, not a panic. Proves the
+    // termios path is SMAP/extable-safe rather than a raw user dereference.
+    int64_t r = sys_ioctl(1, 0x5401 /*TCGETS*/, 0x7000000000ULL, 0, 0, 0);
+    TEST_ASSERT_EQ(r, static_cast<int64_t>(-cinux::kEfault));
 }
 
 void test_sys_clock_gettime_fills_timespec() {
@@ -420,7 +435,9 @@ extern "C" void run_syscall_tests() {
 
     RUN_TEST(test_musl_syscalls::test_sys_writev_sums_iov);
     RUN_TEST(test_musl_syscalls::test_sys_writev_zero_iovcnt_rejected);
-    RUN_TEST(test_musl_syscalls::test_sys_ioctl_returns_enotty);
+    RUN_TEST(test_musl_syscalls::test_sys_ioctl_non_tty_fd_enotty);
+    RUN_TEST(test_musl_syscalls::test_sys_ioctl_unknown_cmd_enotty);
+    RUN_TEST(test_musl_syscalls::test_sys_ioctl_tcgets_unmapped_efault);
     RUN_TEST(test_musl_syscalls::test_sys_clock_gettime_fills_timespec);
     RUN_TEST(test_musl_syscalls::test_sys_clock_gettime_bad_clock_rejected);
 
