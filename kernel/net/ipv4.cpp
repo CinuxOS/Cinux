@@ -13,6 +13,7 @@
 #include "kernel/net/ipv4.hpp"
 
 #include <cinux/checksum.hpp>
+#include <memory>  // std::unique_ptr (heap buffer to stay under 1024B frame)
 
 #include "kernel/net/arp.hpp"        // ArpModule
 #include "kernel/net/icmp.hpp"       // IcmpModule
@@ -81,15 +82,18 @@ cinux::lib::ErrorOr<void> Ipv4Module::send(NetDevice& dev, Ipv4Addr dst, uint8_t
     ip.src        = cfg->local;
     ip.dst        = dst;
 
-    uint8_t buf[kBuf];
-    build_ipv4_header(ip, buf);  // checksum field still 0
+    // Heap-allocated: kBuf (1504B) > 1024B frame budget. Network path uses the
+    // heap (not a static buffer) so concurrent TX on SMP does not share storage.
+    auto buf = std::unique_ptr<uint8_t[]>(new uint8_t[kBuf]);
+    uint8_t* p = buf.get();
+    build_ipv4_header(ip, p);  // checksum field still 0
     for (uint32_t i = 0; i < len; ++i) {
-        buf[sizeof(Ipv4Header) + i] = l4[i];
+        p[sizeof(Ipv4Header) + i] = l4[i];
     }
     // Header checksum over the 20-byte header (checksum field zeroed).
-    const uint16_t cs = cinux::lib::internet_checksum(buf, sizeof(Ipv4Header));
-    buf[10]           = static_cast<uint8_t>(cs >> 8);
-    buf[11]           = static_cast<uint8_t>(cs & 0xFF);
+    const uint16_t cs = cinux::lib::internet_checksum(p, sizeof(Ipv4Header));
+    p[10]             = static_cast<uint8_t>(cs >> 8);
+    p[11]             = static_cast<uint8_t>(cs & 0xFF);
 
     // Next hop: Ethernet resolves dst via ARP (async); loopback skips L2.
     EthAddr next_hop{};
@@ -98,7 +102,7 @@ cinux::lib::ErrorOr<void> Ipv4Module::send(NetDevice& dev, Ipv4Addr dst, uint8_t
             return {};  // ARP request sent; IP packet deferred to the next poll
         }
     }
-    return stack.send_l3(dev, next_hop, kEtherTypeIpv4, buf, sizeof(Ipv4Header) + len);
+    return stack.send_l3(dev, next_hop, kEtherTypeIpv4, p, sizeof(Ipv4Header) + len);
 }
 
 }  // namespace cinux::net

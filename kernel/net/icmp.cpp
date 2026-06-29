@@ -12,6 +12,8 @@
 
 #include "kernel/net/icmp.hpp"
 
+#include <memory>  // std::unique_ptr (heap buffer to stay under 1024B frame)
+
 #include <cinux/checksum.hpp>
 
 #include "kernel/net/net_stack.hpp"  // NetStack (full def for ipv4.send path)
@@ -36,7 +38,11 @@ void IcmpModule::handle(const Ipv4Header& ip, FrameView payload, NetDevice& dev,
         if (n > kMaxIcmp) {
             return;  // too big to mirror (sanity)
         }
-        uint8_t buf[kMaxIcmp];
+        // Heap-allocated: kMaxIcmp (1484B) > 1024B frame budget. Network path
+        // avoids static to dodge SMP-shared-buffer hazards. Fully rewritten
+        // below (loop writes all n bytes, then checksum bytes) -> no zero-init
+        // needed.
+        auto buf = std::unique_ptr<uint8_t[]>(new uint8_t[kMaxIcmp]);
         for (uint32_t i = 0; i < n; ++i) {
             buf[i] = payload.data()[i];  // copy header + echo data verbatim
         }
@@ -44,11 +50,11 @@ void IcmpModule::handle(const Ipv4Header& ip, FrameView payload, NetDevice& dev,
         buf[1]            = 0;               // code 0
         buf[2]            = 0;
         buf[3]            = 0;  // zero checksum before recompute
-        const uint16_t cs = cinux::lib::internet_checksum(buf, n);
+        const uint16_t cs = cinux::lib::internet_checksum(buf.get(), n);
         buf[2]            = static_cast<uint8_t>(cs >> 8);
         buf[3]            = static_cast<uint8_t>(cs & 0xFF);
         // Reply to the request's source; Ipv4Module sources our local address.
-        (void)ipv4.send(dev, ip.src, kIpProtoIcmp, buf, n, stack);
+        (void)ipv4.send(dev, ip.src, kIpProtoIcmp, buf.get(), n, stack);
     } else if (hdr.type == kIcmpEchoReply) {
         ++reply_count_;
         last_id_  = hdr.id;
