@@ -13,13 +13,28 @@
 #include "kernel/net/ipv4.hpp"
 
 #include <cinux/checksum.hpp>
-#include <memory>  // std::unique_ptr (heap buffer to stay under 1024B frame)
 
 #include "kernel/net/arp.hpp"        // ArpModule
 #include "kernel/net/icmp.hpp"       // IcmpModule
 #include "kernel/net/net_stack.hpp"  // InDevice, NetStack
 
 namespace cinux::net {
+
+namespace {
+
+// Local RAII heap buffer (no <memory>): owns a new[]/delete[] byte slice so the
+// ~1504B IP TX buffer stays off the stack. new/delete route through the
+// freestanding crt_stub operator new / kmalloc, which the CI freestanding
+// header gate permits (unlike the hosted <memory> header).
+struct HeapBuf {
+    uint8_t* p;
+    explicit HeapBuf(size_t n) : p(new uint8_t[n]) {}
+    ~HeapBuf() { delete[] p; }
+    HeapBuf(const HeapBuf&)            = delete;
+    HeapBuf& operator=(const HeapBuf&) = delete;
+};
+
+}  // namespace
 
 void Ipv4Module::on_frame(const L2Info& /*l2*/, FrameView payload, NetDevice& dev,
                           NetStack& stack) {
@@ -84,8 +99,8 @@ cinux::lib::ErrorOr<void> Ipv4Module::send(NetDevice& dev, Ipv4Addr dst, uint8_t
 
     // Heap-allocated: kBuf (1504B) > 1024B frame budget. Network path uses the
     // heap (not a static buffer) so concurrent TX on SMP does not share storage.
-    auto buf = std::unique_ptr<uint8_t[]>(new uint8_t[kBuf]);
-    uint8_t* p = buf.get();
+    HeapBuf buf(kBuf);
+    uint8_t* p = buf.p;
     build_ipv4_header(ip, p);  // checksum field still 0
     for (uint32_t i = 0; i < len; ++i) {
         p[sizeof(Ipv4Header) + i] = l4[i];
