@@ -327,6 +327,7 @@ endif()
 if(CINUX_NET)
     target_sources(big_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/test_e1000.cpp)
     target_sources(big_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/test_net.cpp)
+    target_sources(big_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/test_socket.cpp)
 endif()
 
 target_sources(big_kernel_test PRIVATE $<TARGET_OBJECTS:big_kernel_common>)
