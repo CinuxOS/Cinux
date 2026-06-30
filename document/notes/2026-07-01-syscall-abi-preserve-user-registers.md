@@ -1,8 +1,9 @@
 # 2026-07-01 syscall ABI: preserve Linux syscall-preserved user registers
 
-> F-ECO busybox O2 follow-up.  Root cause of the musl `-O1/-O2` corruption was
-> not `brk`/`mmap` return values themselves, but CinuxOS returning from syscall
-> with argument registers clobbered by the kernel C dispatcher.
+> Correction: this note originally claimed the busybox `-O2` smoke was fully
+> fixed.  That was wrong.  Restoring Linux syscall-preserved GPRs is necessary,
+> but it was not sufficient for the mallocng `a_crash`.  The remaining root
+> cause is documented in `2026-07-01-syscall-simd-state-preserve.md`.
 
 ## Symptom
 
@@ -16,7 +17,7 @@ could enter musl mallocng's `a_crash` path:
 `0x406a66` is musl's x86_64 `hlt` trap in `a_crash`, used as a heap-integrity
 alarm.  `-O0` happened to avoid the failure, while optimized builds exposed it.
 
-## Root Cause
+## Root Cause Addressed Here
 
 musl's x86_64 syscall wrappers use inline asm matching the Linux syscall ABI:
 
@@ -37,9 +38,8 @@ CinuxOS captured those argument registers in the syscall frame on entry, but the
 return path only restored SysV callee-saved registers (`r12-r15/rbx/rbp`).  The
 call to `syscall_dispatch` is a normal C call, so it may freely clobber
 caller-saved registers.  Returning those clobbered values to user mode violated
-Linux's raw syscall ABI.  Optimized musl kept live state in those registers
-across inline syscalls, then reused corrupted values, leading to allocator
-metadata damage and the later mallocng trap.
+Linux's raw syscall ABI.  Optimized user code may keep live state in those
+registers across inline syscalls, so returning clobbered values is invalid.
 
 This also explains why function-call-shaped or unoptimized paths were much less
 sensitive: the compiler already treats ordinary C calls as clobbering
@@ -62,7 +62,7 @@ for `rax=0`.
 No trap-frame size change was needed; the missing registers were already saved
 at syscall entry.
 
-## Validation
+## Superseded Validation
 
 The local build was configured with:
 
@@ -78,7 +78,12 @@ The current musl sysroot is an optimized one:
 build/musl/musl-1.2.6/config.mak: CFLAGS = -O2 -g3 -fno-omit-frame-pointer
 ```
 
-The current busybox binary was linked with musl-gcc and busybox `-Oz -static`.
+The busybox binary used for the later reproduced failure was:
+
+```text
+md5(build/musl/busybox) = 993475f67490ef73e262466050ff27b9
+md5(/tmp/busybox/busybox) = 993475f67490ef73e262466050ff27b9
+```
 
 Commands:
 
@@ -89,15 +94,15 @@ cmake --build build --target test_host -j$(nproc)
 python3 scripts/check_freestanding_headers.py
 ```
 
-Results:
+The PASS result originally recorded here was a false positive: sandboxed QEMU
+failed to create its VNC/socket, so the guest smoke did not really execute.
+When re-run as a real QEMU execution with optimized busybox, this GPR-only fix
+still failed:
 
-- `run-kernel-test-all`: PASS, single-CPU then `-smp 2`.
-- `run-kernel-test`: PASS with busybox smoke enabled.
-- `test_host`: 69/69 PASS.
-- freestanding header gate: PASS.
+```text
+[ERROR] #GP user mode ... rip=0x0000000000406A66 ... -- sending SIGILL
+[F-ECO] busybox echo 0/5 PASS -> FAIL
+```
 
-## Notes
-
-`build/debug.log` still contained an older pre-fix `#GP @ 0x406a66` diagnostic
-line from 2026-07-01 00:21; it predates the successful reruns and is stale.
-
+The GPR restore remains correct and is kept, but the successful busybox
+validation belongs to the later SIMD/FPU entry-state fix.
