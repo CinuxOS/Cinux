@@ -85,6 +85,15 @@ enum class SyscallNr : uint64_t {
     SYS_recvfrom = 45,  ///< receive a message (blocking; addr-aware)
     SYS_bind     = 49,  ///< bind to a local address/port
     SYS_listen   = 50,  ///< mark passive (TCP)
+    // --- F-ECO batch 2: VFS metadata + dirent syscalls (Linux x86_64 numbers) ---
+    SYS_rename   = 82,    ///< rename a file (mv)
+    SYS_link     = 86,    ///< create a hard link (ln)
+    SYS_symlink  = 88,    ///< create a symbolic link (ln -s)
+    SYS_readlink = 89,    ///< read a symlink's target path
+    SYS_chmod    = 90,    ///< change file permissions
+    SYS_chown    = 92,    ///< change owner (uid/gid; 0xFFFFFFFF = unchanged)
+    SYS_umask    = 95,    ///< set/get the file-creation mode mask
+    SYS_utimensat = 312,  ///< set access / modification times (touch)
 };
 
 /// Dispatch table covers all assigned Linux x86_64 numbers (max ~440) with

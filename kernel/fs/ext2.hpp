@@ -169,6 +169,40 @@ public:
     int unlink(uint32_t parent_ino, const char* name, uint32_t name_len);
 
     // ============================================================
+    // F-ECO batch 2: attribute + dirent operations
+    // ============================================================
+
+    /// Change an inode's permission bits (sys_chmod). Keeps the file-type bits
+    /// in i_mode, replaces the low 12 permission bits. @return true on success.
+    bool chmod(uint32_t ino, uint32_t mode);
+
+    /// Change an inode's owner (sys_chown). 0xFFFFFFFF leaves uid/gid unchanged.
+    bool chown(uint32_t ino, uint32_t uid, uint32_t gid);
+
+    /// Set access/modification times (sys_utimensat). nsec truncated (rev-0 inode).
+    bool utimensat(uint32_t ino, uint64_t atime_sec, uint32_t atime_nsec, uint64_t mtime_sec,
+                   uint32_t mtime_nsec);
+
+    /// Read a symlink's target into @p buf (sys_readlink).
+    /// @return bytes written (>=0), or -1 on error.
+    int64_t readlink(uint32_t ino, char* buf, uint64_t buf_size);
+
+    /// Create a symbolic link (sys_symlink): new inode (S_IFLNK), target string
+    /// stored in its first data block, linked into @p parent_ino.
+    /// @return the new VFS Inode, or nullptr on failure.
+    Inode* symlink(uint32_t parent_ino, const char* name, uint32_t name_len, const char* target);
+
+    /// Create a hard link (sys_link): adds a directory entry in @p parent_ino
+    /// referring to @p target_ino, and bumps the target's link count.
+    bool link(uint32_t parent_ino, const char* name, uint32_t name_len, uint32_t target_ino);
+
+    /// Rename (sys_rename): remove @p src_name from @p src_dir_ino and add
+    /// @p dst_name referring to the same inode in @p dst_dir_ino. The two
+    /// directories may be the same.
+    bool rename(uint32_t src_dir_ino, const char* src_name, uint32_t src_len,
+                uint32_t dst_dir_ino, const char* dst_name, uint32_t dst_len);
+
+    // ============================================================
     // Block allocator
     // ============================================================
 

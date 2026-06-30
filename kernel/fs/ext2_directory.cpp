@@ -453,4 +453,22 @@ int Ext2::unlink(uint32_t parent_ino, const char* name, uint32_t name_len) {
     return 0;
 }
 
+// ============================================================
+// F-ECO batch 2 dirent-op stubs (block B replaces these with real
+// implementations built on add_dir_entry / remove_dir_entry).
+// ============================================================
+
+cinux::lib::ErrorOr<void> Ext2DirOps::symlink(Inode*, const char*, uint32_t, const char*) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2DirOps::link(Inode*, const char*, uint32_t, const Inode*) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2DirOps::rename(Inode*, const char*, uint32_t, Inode*, const char*,
+                                             uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
 }  // namespace cinux::fs

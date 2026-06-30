@@ -258,6 +258,13 @@ struct Task {
     uint32_t gid{0};   ///< Real group ID (0 = root)
     uint32_t egid{0};  ///< Effective group ID (0 = root)
 
+    // F-ECO batch 2: POSIX file-creation mask (sys_umask). Default 0o022.
+    // sys_umask returns the previous mask and sets the new one (masked to 0777).
+    // create/mkdir do not yet honour it (ext2 is not task-aware); applying it
+    // at creation is a follow-up. Inherited across fork() via the whole-Task
+    // memcpy, so no explicit copy code is needed.
+    uint32_t umask{0022};
+
     /**
      * CLONE_CHILD_CLEARTID address (F3-M2 batch 4/5).  On thread exit the
      * kernel writes 0 here and futex_wakes any waiter.  0 = not set.

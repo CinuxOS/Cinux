@@ -45,6 +45,15 @@
 #include "kernel/syscall/sys_ping.hpp"
 #include "kernel/syscall/sys_pipe.hpp"
 #include "kernel/syscall/sys_socket.hpp"
+// F-ECO batch 2: VFS metadata + dirent syscalls.
+#include "kernel/syscall/sys_chmod.hpp"
+#include "kernel/syscall/sys_chown.hpp"
+#include "kernel/syscall/sys_link.hpp"
+#include "kernel/syscall/sys_readlink.hpp"
+#include "kernel/syscall/sys_rename.hpp"
+#include "kernel/syscall/sys_symlink.hpp"
+#include "kernel/syscall/sys_umask.hpp"
+#include "kernel/syscall/sys_utimensat.hpp"
 #include "kernel/syscall/sys_read.hpp"
 #include "kernel/syscall/sys_rmdir.hpp"
 #include "kernel/syscall/sys_set_tid_address.hpp"
@@ -149,6 +158,16 @@ void register_builtin_handlers() {
     syscall_register(SyscallNr::SYS_recvfrom, sys_recvfrom);
     syscall_register(SyscallNr::SYS_bind, sys_bind);
     syscall_register(SyscallNr::SYS_listen, sys_listen);
+
+    // F-ECO batch 2: VFS metadata + dirent syscalls.
+    syscall_register(SyscallNr::SYS_rename, sys_rename);
+    syscall_register(SyscallNr::SYS_symlink, sys_symlink);
+    syscall_register(SyscallNr::SYS_link, sys_link);
+    syscall_register(SyscallNr::SYS_readlink, sys_readlink);
+    syscall_register(SyscallNr::SYS_chmod, sys_chmod);
+    syscall_register(SyscallNr::SYS_chown, sys_chown);
+    syscall_register(SyscallNr::SYS_umask, sys_umask);
+    syscall_register(SyscallNr::SYS_utimensat, sys_utimensat);
 }
 
 }  // anonymous namespace

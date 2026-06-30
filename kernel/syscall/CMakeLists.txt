@@ -38,4 +38,13 @@ target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_clock_gettime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_ping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_socket.cpp
+    # F-ECO batch 2: VFS metadata + dirent syscalls.
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_chmod.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_chown.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_link.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_readlink.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_rename.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_symlink.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_umask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_utimensat.cpp
 )

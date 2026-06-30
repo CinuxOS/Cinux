@@ -241,6 +241,26 @@ cinux::lib::ErrorOr<void> Ext2FileOps::stat(const Inode* inode, struct stat* st)
 }
 
 // ============================================================
+// F-ECO batch 2 stubs (block A replaces these with real implementations).
+// ============================================================
+
+cinux::lib::ErrorOr<void> Ext2FileOps::chmod(Inode*, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2FileOps::chown(Inode*, uint32_t, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2FileOps::utimensat(Inode*, uint64_t, uint32_t, uint64_t, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<int64_t> Ext2FileOps::readlink(const Inode*, char*, uint64_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+// ============================================================
 // Ext2DirOps
 // ============================================================
 
@@ -403,6 +423,19 @@ cinux::lib::ErrorOr<void> Ext2DirOps::stat(const Inode* inode, struct stat* st) 
     st->st_ctime   = disk.i_ctime;
 
     return {};
+}
+
+// F-ECO batch 2 directory attribute stubs (block A replaces these).
+cinux::lib::ErrorOr<void> Ext2DirOps::chmod(Inode*, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2DirOps::chown(Inode*, uint32_t, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
+}
+
+cinux::lib::ErrorOr<void> Ext2DirOps::utimensat(Inode*, uint64_t, uint32_t, uint64_t, uint32_t) {
+    return cinux::lib::Error::NotImplemented;
 }
 
 }  // namespace cinux::fs
