@@ -2,7 +2,7 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
-## 🔄 F6-M2 ProcFS（/proc 进程自省虚拟文件系统）— 2026-06-30 立项
+## ✅ F6-M2 ProcFS（/proc 进程自省虚拟文件系统）— 收官 2026-06-30（分支 worktree-f6-m2-procfs 待 PR）
 
 > Feature 域 F6 VFS 第二里程碑。接 F6-M3 DevFS（已合 main PR#48）—— 照抄 DevFs 范式（`FileSystem` 子类 + 匿名 namespace `InodeOps` 子类 + boot 接线单独 `procfs_init.cpp`），把内核 Task registry 暴露成 `/proc`。**范围栅栏（不投机）**：本里程碑只做**进程自省**——`/proc` 根 readdir 枚举 pid + `/proc/<pid>/` 目录 + `/proc/<pid>/{stat,cmdline}` 动态伪文件。**不做**静态信息节点（`/proc/version`/`meminfo`/`cpuinfo`/`uptime`）、不做 `/proc/<pid>/{maps,fd,status}` —— 留 follow-up（见 todo `01-procfs.md`）。分支 `worktree-f6-m2-procfs`（worktree 从干净 main `c0188cd`）。
 > **设计（照抄 DevFs + 适配动态语义）**：`ProcFs`（`FileSystem` 子类，内存型虚拟 FS）。DevFs 根目录是定长节点表；ProcFs 根目录条目是**动态 pid**（Task registry 实时快照），故 readdir 走新增 `signal_enumerate_task_pids` accessor（`g_registry_lock` 下快照，**纯增量**不改 register/unregister/find_by_pid）。叶 inode 身份：`PID_MAX=256` 有界，ProcFs 持 `pid_dir_inodes_[257]`/`stat_inodes_[257]`/`cmdline_inodes_[257]` 定长池（pid 索引），`ino=pid`、`fs_private=this` —— **SMP 安全**（每 pid 稳定 inode，并发 lookup 不竞态）+ **无泄漏**（close 只删 File 不删 Inode，inode 归 ProcFs，对齐 DevFs）。lookup strip `/` 后解析 `<pid>`/`<pid>/stat`/`<pid>/cmdline`，pid 经现有 `signal_find_task_by_pid` 校验存活（非活 → NotFound，对齐 Linux 只露活进程）。
@@ -17,7 +17,7 @@
 | 2 | `signal_nth_task_pid` accessor（signal.hpp/cpp，纯增量；锁内走到第 n 个 task）+ `ProcRootDirOps::readdir` 真枚举 pid + 测（readdir 列出注册 pid；注销后消失）。**frame-safe**：原 `signal_enumerate_task_pids` 快照版在 readdir 栈上 `int pids[257]`=1028B 超 kernel `-Wframe-larger-than=1024`，改 nth 版（锁内走到 index，无栈数组） | ✅ | 本次 | 全量编绿 + run-kernel-test-all 两 leg 992/0（+1 enumerate） |
 | 3 | `/proc/<pid>/` 子目录：`ProcPidDirOps`（readdir `"stat"`/`"cmdline"`）+ `ProcStatFileOps`/`ProcCmdlineFileOps`（动态伪文件，read 时 `signal_find_task_by_pid`→Task 字段生成内容；`/proc/<pid>/stat` = `pid (name) state ppid tgid uid gid`，`/proc/<pid>/cmdline` = name 尽力）+ lookup `<pid>/stat`/`<pid>/cmdline` + 测（read stat 内容含 pid+name；dead pid read→NotFound）。**拆文件**：procfs.cpp 504 行超 500 软限，按职责拆出 `procfs_content.{hpp,cpp}`（Task→文本生成器），procfs.cpp 留 FS plumbing（406 行） | ✅ | 本次 | 全量编绿 + run-kernel-test-all 两 leg 997/0（+5 伪文件测） |
 | 4 | boot 接线：`procfs_init.cpp`（`procfs::init()` mount+`vfs_mount_add("/proc")`）+ `kernel/fs/CMakeLists.txt`(+procfs_init) + `init.cpp` 挂 procfs::init()（devfs::init 后）+ `make run` 冒烟（/proc 装配零 panic） | ✅ | 本次 | run-kernel-test-all 两 leg 997/0 回归 + 生产 boot 冒烟 `[PROCFS] mounted at /proc` 零 panic |
-| 5 | 收官：note + ROADMAP F6-M2 ✅ + PLAN ✅ + todo `01-procfs.md` 打勾（本批范围） | ⏳ | | docs-only |
+| 5 | 收官：note + ROADMAP F6-M2 ✅ + PLAN ✅ + todo `01-procfs.md` 打勾（本批范围） | ✅ | 本次 | docs-only |
 
 ### 风险 / 陷阱
 - **Inode 身份/生命周期**：close 只删 File 不删 Inode（file.cpp 验证），故 ProcFs 必须自持叶 inode 生命。定长 pid 索引池解决（每 pid 稳定 inode）。若用「单 scratch inode 复用」→ 并发同 kind lookup 竞态覆写 pid → 错读（明确**不**这么做）。
