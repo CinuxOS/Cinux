@@ -37,6 +37,13 @@ cinux::lib::ErrorOr<void> InodeOps::stat(const Inode*, struct stat*) {
     return cinux::lib::Error::NotImplemented;
 }
 
+cinux::lib::ErrorOr<int64_t> InodeOps::ioctl(const Inode*, uint32_t, uint64_t) {
+    // "This inode type does not implement ioctls."  sys_ioctl translates this
+    // into -ENOTTY for the caller (the Linux convention for an ioctl an inode
+    // does not handle), so the default is observationally "not a tty ioctl".
+    return cinux::lib::Error::NotImplemented;
+}
+
 bool InodeOps::is_page_cacheable() const {
     return false;
 }

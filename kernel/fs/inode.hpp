@@ -63,6 +63,14 @@ public:
     virtual cinux::lib::ErrorOr<void>    unlink(Inode* dir, const char* name, uint32_t namelen);
     virtual cinux::lib::ErrorOr<void>    stat(const Inode* inode, struct stat* st);
 
+    /// Device-specific ioctl (terminal ioctls on a PTY/console inode, ...).
+    /// @p request is the Linux ioctl request word (TCGETS, TIOCSCTTY, ...);
+    /// @p arg the opaque user payload.  The default returns NotImplemented;
+    /// sys_ioctl maps that to -ENOTTY, so an inode type that does not override
+    /// this simply answers "not a tty ioctl".  Overrides cross the user/kernel
+    /// boundary themselves (copy_to/from_user).
+    virtual cinux::lib::ErrorOr<int64_t> ioctl(const Inode* inode, uint32_t request, uint64_t arg);
+
     /// Whether reads against this inode should be served through the file-backed
     /// PageCache.  Disk-backed filesystems (ext2) override to true so that
     /// sys_read and demand paging share one cache; transient inode-ops shims
