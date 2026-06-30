@@ -37,6 +37,7 @@
 #include "kernel/net/ipv4.hpp"
 #include "kernel/net/loopback_device.hpp"
 #include "kernel/net/net_stack.hpp"
+#include "kernel/net/socket.hpp"
 #include "kernel/net/tcp.hpp"
 #include "kernel/net/udp.hpp"
 #include "kernel/proc/scheduler.hpp"
@@ -201,6 +202,16 @@ void start_poll_driver() {
 
 void set_default_rx_pump(RxPump pump) {
     g_default_pump = (pump != nullptr) ? pump : pump_yield;
+}
+
+Socket* create_socket(int domain, int type) {
+    // B1b: a bare stub Socket (no module refs needed, so no g_ready gate -- the
+    // fd machinery is exercisable even in the test kernel, which does not bring
+    // up the production stack). B2 switches SOCK_DGRAM -> UdpSocket (drives
+    // g_udp), B3 SOCK_STREAM -> TcpSocket (drives g_tcp); both override the
+    // stub virtuals to do real work.
+    (void)g_ready;
+    return new Socket(domain, type);
 }
 
 }  // namespace cinux::net

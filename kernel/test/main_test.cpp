@@ -130,6 +130,7 @@ void run_creds_tests();  // F9 batch 9: process credentials
 #ifdef CINUX_NET
 void run_e1000_tests();
 void run_net_tests();  // F7 L1: loopback L3 stack (ping 127.0.0.1, deterministic)
+void run_socket_tests();  // F7-M6: socket syscall plumbing (B1b)
 #endif
 }
 
@@ -642,6 +643,10 @@ extern "C" void kernel_main() {
     // timing (loopback is synchronous), so this runs unconditionally under
     // CINUX_NET, before the LAPIC-timer-dependent e1000 RX above is any concern.
     run_net_tests();
+
+    // F7-M6 B1b: socket syscall plumbing (stub Socket; socket()/close()/arg
+    // validation). UdpSocket/TcpSocket + loopback echo land in B2/B3.
+    run_socket_tests();
 #endif
 
     // Ramdisk tests (026): verifies ustar parsing of embedded initrd
