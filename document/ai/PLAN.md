@@ -2,6 +2,36 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
+## ✅ F7-M5 TCP（传输层：三次握手 / 序号-ACK / 四次挥手 + 伪首部校验和）— 收官 2026-06-30（分支 worktree-f7-m5-tcp 待 PR）
+
+> worktree `worktree-f7-m5-tcp`（从干净 main `c0188cd`，接 F7-M4 UDP ✅）。在 IPv4 同层加 TCP：`TcpModule : L4Handler`（proto=6）经 `ipv4.add_l4(kIpProtoTcp, tcp)` 入 L4 proto 表（M4 已立单一分派机制，加协议不疼）。**范围（用户拍板）**：TCP 状态机（三次握手 / 序号-ACK / 四次挥手）+ 伪首部校验和；**最小可用（无内核 timer-wake）——单方向数据 + 无重传**；真重传/RTO/滑动窗口/拥塞控制、TCP Socket（listen/accept/recv）留 follow-up（Socket 进 F7-M6）。**栅栏**：不碰 socket/syscall（M6）、不进 production `net_init.cpp`（无消费者，同 M4 UDP）、test-only（host 单测 + loopback 内核 round-trip + e1000 TX smoke）。
+> 验证：每批 `timeout 120 cmake --build build --target run-kernel-test-all -j$(nproc)` 两 leg 绿（基线 **986/0**——main c0188cd 已含 F10-M3 PTY；**本地必须** `cmake -B build -DCINUX_MUSL_HELLO_SMOKE=OFF -DCINUX_MUSL_DYN_SMOKE=OFF -DCINUX_BUILD_TESTS=ON` 防 smoke 挂死 + 编 host 测）；改公共头（ipv4.hpp 加 `kIpProtoTcp`）push 前补全量 `cmake --build build`。**并发会话占 VNC :0**：本机多 worktree 会话全用硬编码 `-vnc :0`，本 worktree 验证临时切 `-vnc :5`、跑完 `git checkout -- cmake/qemu.cmake` 还原（验证 hack，非代码改动）。
+
+### 设计要点（决定打法，已读码核实）
+- **poll() budget loop（64）单次排干 loopback 上整个握手+数据+挥手**：每步 reply 在 dispatch 期间经 `send_l3` 入队、下一 budget 轮排干（[net_stack.cpp:108](../../kernel/net/net_stack.cpp#L108)）。TCP 多包交换因此能在确定性 loopback 上端到端验证，无需 SLIRP/timer。
+- **伪首部校验和**：TCP 与 UDP 同用 12 字节伪首部（src/dst IP + 0 + proto + L4 长度），proto=6。沿用 UDP 连续缓冲区法 [伪首部|TCP 头|payload] 一把 `internet_checksum`（[udp.cpp](../../kernel/net/udp.cpp) 范式）。TCP 校验和**必填**（与 UDP 不同，checksum=0 不是「无校验和」）。
+- **ISN**：简单递增计数器（确定性，测试可复现）；ISN 随机化（安全，对齐 F9 ASLR 同族）留 follow-up。
+- **连接表**：固定表（kMaxTcpCons），4-tuple 键（local/remote addr+port）。loopback 上客户端/服务端两条记录同居一表——一表跑双端状态机，测试干净。
+
+### 批表
+| 批 | 范围 | 状态 | 测试 |
+|----|------|------|------|
+| 0 | 立项 docs（本段）+ ROADMAP F7-M5 🔄 + todo `04-tcp.md` 范围栅栏 | ✅ `405f445` | docs-only |
+| 1 | tcp.hpp wire（TcpHeader 20B + SYN/ACK/FIN/RST/PSH/URG + parse/build + data-off）+ `ipv4.hpp` 加 `kIpProtoTcp=6`（不改 add_l8）+ tcp.cpp 骨架（伪首部校验和门 + handle 诊断）+ CMake + host 单测（头 round-trip/flags/校验和 round-trip/坏校验和 drop） | ✅ `30a136a` | host net_tcp 4/0 + run-kernel-test-all 两 leg 各 986/0（零回归） |
+| 2 | 连接表 + `listen`/`connect` + 握手 FSM（SYN→SYN-ACK→ACK，序号-ACK 算术）+ RST（SYN 到未监听端口）+ host mock 验时序 | ✅ `fb9f4b8` | host net_tcp 7/0（+3）+ run-kernel-test-all 两 leg 各 986/0 |
+| 3 | `send`（数据段 + ACK 推进）+ `close`（FIN）+ 数据/挥手 FSM（4-way）+ host 单测（established 数据 round-trip + 挥手） | ✅ `ec0aa78` | host net_tcp 9/0（+2）+ run-kernel-test-all 两 leg 各 986/0 |
+| 4 | loopback 内核 round-trip（test_net.cpp `test_tcp_loopback`：单 poll 排干握手+数据+挥手）+ e1000 TX smoke（`test_tcp_e1000_tx`：发 TCP 段，ARP resolve+send ok） | ✅ `cf0db3e` | run-kernel-test-all 两 leg 各 988/0（+2 TCP）+ check_net_decoupling 绿 |
+| 5 | note + ROADMAP F7-M5 ✅ + PLAN 收官 | ✅ | docs-only |
+| 6 | 对抗性加固：handle 头长度 sanity 门（data_off<5 / >payload 丢）+ host 6 负测（截断头/畸形 data_off×2/连接表满/迷路 ACK/乱序数据） | ✅ `24bd4e4` | host net_tcp 15/0（+6）+ run-kernel-test-all 两 leg 各 988/0 |
+
+> **F7-M5 收官**（2026-06-30,worktree-f7-m5-tcp 12 commit 待 PR）：TCP 协议层——`TcpModule : L4Handler`（proto=6）经 `ipv4.add_l8` 入 L4 表。6 批:wire+校验和门(批1)→握手 FSM+RST(批2)→数据+四次挥手(批3)→内核 loopback 端到端+e1000 TX smoke(批4)→收官(批5)→对抗性加固+负测(批6)。**架构**:沿用 UDP 范式(L4Handler 缝 + 连续缓冲区伪首部校验和),加协议不疼。**最小可用诚实标注**:无重传/RTO/滑动窗口/拥塞控制(需 timer 基建)、ISN 随机化(安全,follow-up)、TCP Socket(listen/accept/recv 进 F7-M6)。范围栅栏:不进 production net_init(无消费者)、test-only。验证:host net_tcp 15/0 + run-kernel-test-all 两 leg 各 988/0 + check_net_decoupling 绿。**当前不可达**(生产不注册 TCP)故零崩风险;批6 给 M6 接进生产后兜底(坏段不崩)。详见各批 notes。**push/PR 归用户**。
+
+### 风险 / 陷阱
+- **状态机复杂度**：TCP 是网络层最复杂协议。缓解：按批递进（wire→握手→数据/挥手），每批独立绿；最小可用（无重传/窗口/拥塞）诚实标注，不包装成完整 TCP。
+- **校验和门**：handle 收到的 payload 就是整个 TCP 段（IP 已剥头）；伪首部用 TCP 段长（头+数据）。TCP 校验和必填，0 不跳过。
+- **loopback 单 poll 多包**：握手 3 包 + 数据 + 挥手靠 budget loop 排干；某步不生成下一段会早停——测试观察 state 推进断言。
+- **栅栏**：不进 production `net_init.cpp`（同 UDP，无消费者）；socket/accept/recv 留 M6；smoke 默认 ON 挂死，本地 OFF。
+
 ## ✅ F6-M2 ProcFS（/proc 进程自省虚拟文件系统）— 收官 2026-06-30（分支 worktree-f6-m2-procfs 待 PR）
 
 > Feature 域 F6 VFS 第二里程碑。接 F6-M3 DevFS（已合 main PR#48）—— 照抄 DevFs 范式（`FileSystem` 子类 + 匿名 namespace `InodeOps` 子类 + boot 接线单独 `procfs_init.cpp`），把内核 Task registry 暴露成 `/proc`。**范围栅栏（不投机）**：本里程碑只做**进程自省**——`/proc` 根 readdir 枚举 pid + `/proc/<pid>/` 目录 + `/proc/<pid>/{stat,cmdline}` 动态伪文件。**不做**静态信息节点（`/proc/version`/`meminfo`/`cpuinfo`/`uptime`）、不做 `/proc/<pid>/{maps,fd,status}` —— 留 follow-up（见 todo `01-procfs.md`）。分支 `worktree-f6-m2-procfs`（worktree 从干净 main `c0188cd`）。
