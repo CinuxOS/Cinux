@@ -195,7 +195,9 @@
 |----|------|------|--------|------|
 | 1 | UDP 协议核心：`udp.{hpp,cpp}`（UdpHeader parse/build + UdpModule send/handle/bind/unbind + 伪首部校验和连续缓冲区法）+ `L4Handler` 缝进 ipv4.hpp + `Ipv4Module` proto 表（ICMP 迁入 ctor 注册，删 TODO）+ `kIpProtoUdp=17` + host 单测 `test_net_udp`（9 例：头/线序/round-trip/校验和损坏/checksum=0/无 listener/双端口/unbind/重复 bind） | ✅ | 本次 | ctest 63/63（+net_udp）+ run-kernel-test-all 两 leg 967/0（ICMP 走表实证 loopback+e1000+production+sys_ping ping reply 全通） |
 | 2 | loopback UDP round-trip 内核测：`test_net.cpp` 加 `test_udp_loopback`（127.0.0.1 UDP send→单次 poll→listener 收到 payload+端口，确定性躲 SLIRP） | ✅ | 本次 | run-kernel-test-all 两 leg 968/0（+1 UDP）+ `[net] loopback UDP: 6 bytes` 两 leg实证 |
-| 3 | e1000 UDP TX smoke（发 UDP 到 10.0.2.2，断言 ARP resolve + send ok，不期望 reply）+ ROADMAP F7-M4✅ + todo 03-udp 打勾 + note + PLAN 收官 | ⏳ | | run-kernel-test-all 两 leg 绿 + check_net_decoupling 绿 |
+| 3 | e1000 UDP TX smoke（发 UDP 到 10.0.2.2，断言 ARP resolve + send ok，不期望 reply）+ ROADMAP F7-M4✅ + todo 03-udp 打勾 + note + PLAN 收官 | ✅ | 本次 | run-kernel-test-all 两 leg 969/0（+1 UDP TX）+ `[net] e1000 UDP TX -> 10.0.2.2: ARP resolved + send ok` 两 leg实证；check_net_decoupling 绿 |
+
+> **F7-M4 收官**（2026-06-30,feat/f7-m4-udp 3 commit 待 PR）:UDP 协议层(封装/解析/端口多路复用) + Ipv4Module L4 proto 表(ICMP 迁入,还掉 TODO)。三批:协议核心+host 单测(63/63) → loopback 内核 round-trip(968/0) → e1000 TX smoke(969/0)。**架构**:L4 分派单一机制(proto→handler 表),加 TCP 不疼。范围栅栏:socket API/M6、TCP/M5、不进生产 net::init(无消费者)。GOTCHA(过程):会话续接 cwd 重置回主仓,build 跑错仓库一度误判——ELF grep UDP 字符串 + pwd 排破,重进 worktree 重验。详见各批 note。**push/PR 归用户**。
 
 > **GOTCHA**：① ctor 里 `add_l4(kIpProtoIcmp, icmp)` 需 `IcmpModule&→L4Handler&` 转换，但 ipv4.hpp 只前向声明 IcmpModule（include icmp.hpp 会循环）→ **ctor 定义挪到 ipv4.cpp**（.cpp include icmp.hpp 完整类型）；② UDP 校验和用连续缓冲区 [伪首部 12 | UDP 头 8 | payload] 一把 `internet_checksum`，避开 partial+手搓拼接；③ `h.length`（非 delivered 字节数）重建伪首部 + 求和匹配 sender；checksum=0 跳过验证，TX 算出 0 发 0xFFFF。
 
