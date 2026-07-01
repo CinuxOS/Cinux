@@ -100,7 +100,13 @@ DEBUGFS_CMDS+="write $TMPDIR/etc/passwd etc/passwd\n"
 DEBUGFS_CMDS+="write $TMPDIR/etc/group etc/group\n"
 DEBUGFS_CMDS+="write $TMPDIR/hello.txt hello.txt\n"
 
-if [ -n "$SHELL_ELF" ] && [ -f "$SHELL_ELF" ]; then
+# /bin/sh: prefer busybox (interactive `sh` applet) when built -- argv[0]
+# "/bin/sh" → busybox dispatches by basename "sh" → ash shell, so the existing
+# shell_launch (which execves /bin/sh) boots straight into busybox sh for the
+# smoke test. Absent busybox → fall back to the user_shell ELF (CI / no sysroot).
+if [ -n "$BUSYBOX_ELF" ] && [ -f "$BUSYBOX_ELF" ]; then
+    DEBUGFS_CMDS+="write $BUSYBOX_ELF bin/sh\n"
+elif [ -n "$SHELL_ELF" ] && [ -f "$SHELL_ELF" ]; then
     DEBUGFS_CMDS+="write $SHELL_ELF bin/sh\n"
 fi
 
