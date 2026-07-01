@@ -55,6 +55,9 @@ target_sources(big_kernel_common PRIVATE
     # F-ECO batch 5: sysinfo + getrusage (ps/free/uptime/top).
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_sysinfo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_getrusage.cpp
+    # F-ECO busybox sh smoke: poll stub + uname.
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_poll.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_uname.cpp
     # F-ECO batch 7a: socket syscall alignment (accept4 + setsockopt/getsockopt).
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_accept4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_setsockopt.cpp
