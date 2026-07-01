@@ -40,6 +40,7 @@
 #include "kernel/syscall/sys_mkdir.hpp"
 #include "kernel/syscall/sys_mknod.hpp"
 #include "kernel/syscall/sys_mmap.hpp"
+#include "kernel/syscall/sys_nanosleep.hpp"  // F-ECO batch 3
 #include "kernel/syscall/sys_open.hpp"
 #include "kernel/syscall/sys_pgrp.hpp"
 #include "kernel/syscall/sys_ping.hpp"
@@ -96,6 +97,7 @@ void register_builtin_handlers() {
     syscall_register(SyscallNr::SYS_close, sys_close);
     syscall_register(SyscallNr::SYS_exit, sys_exit);
     syscall_register(SyscallNr::SYS_yield, sys_yield);
+    syscall_register(SyscallNr::SYS_nanosleep, sys_nanosleep);  // F-ECO batch 3
     syscall_register(SyscallNr::SYS_getdents, sys_getdents);
     syscall_register(SyscallNr::SYS_getdents64, sys_getdents64);  // F-ECO batch 1
     syscall_register(SyscallNr::SYS_creat, sys_creat);

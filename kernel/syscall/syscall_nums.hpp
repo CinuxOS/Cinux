@@ -40,6 +40,7 @@ enum class SyscallNr : uint64_t {
     SYS_writev         = 20,  ///< write from multiple buffers (musl __stdio_write)
     SYS_pipe           = 22,
     SYS_yield          = 24,  ///< sched_yield
+    SYS_nanosleep      = 35,  ///< sleep for a duration (F-ECO batch 3)
     SYS_getpid         = 39,
     SYS_fork           = 57,
     SYS_clone          = 56,  ///< create a thread/process (F3-M2)

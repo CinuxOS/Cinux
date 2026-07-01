@@ -47,4 +47,6 @@ target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_symlink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_umask.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_utimensat.cpp
+    # F-ECO batch 3: nanosleep (sleep).
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_nanosleep.cpp
 )

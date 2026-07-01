@@ -30,6 +30,7 @@
 #include "big_kernel_test.h"
 #include "kernel/arch/x86_64/gdt.hpp"
 #include "kernel/arch/x86_64/syscall.hpp"
+#include "kernel/drivers/hpet/hpet.hpp"  // monotonic_ns (nanosleep duration check)
 #include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/proc/process.hpp"
@@ -38,6 +39,7 @@
 #include "kernel/syscall/sys_exit.hpp"
 #include "kernel/syscall/sys_ioctl.hpp"
 #include "kernel/syscall/sys_iov.hpp"
+#include "kernel/syscall/sys_nanosleep.hpp"  // F-ECO batch 3
 #include "kernel/syscall/sys_write.hpp"
 #include "kernel/syscall/sys_yield.hpp"
 #include "kernel/syscall/syscall_nums.hpp"
@@ -466,6 +468,42 @@ void test_sys_clock_gettime_realtime_ahead_of_monotonic() {
     TEST_ASSERT_TRUE(rt.tv_sec > mono.tv_sec);
 }
 
+// --- F-ECO batch 3: nanosleep (poll+yield until the HPET deadline) ---
+void test_sys_nanosleep_sleeps_requested_duration() {
+    // 5 ms requested.  Measure the HPET monotonic delta around the call -- it
+    // must be >= 5 ms (slept at least that long) and under a sane upper bound
+    // (no hang).  do_nanosleep_kernel takes kernel pointers (no copy_from_user
+    // in the ring0 test kernel).
+    const uint64_t            k5ms = 5ull * 1'000'000ull;
+    cinux::syscall::ktimespec req{0, static_cast<int64_t>(k5ms)};
+    cinux::syscall::ktimespec rem{9, 9};
+    const uint64_t            before =
+        cinux::drivers::g_hpet.available() ? cinux::drivers::g_hpet.monotonic_ns() : 0;
+    int64_t        r = cinux::syscall::do_nanosleep_kernel(&req, &rem);
+    const uint64_t after =
+        cinux::drivers::g_hpet.available() ? cinux::drivers::g_hpet.monotonic_ns() : 0;
+    TEST_ASSERT_EQ(r, 0);
+    TEST_ASSERT_EQ(rem.tv_sec, 0);
+    TEST_ASSERT_EQ(rem.tv_nsec, 0);  // fully slept, no EINTR path
+    if (cinux::drivers::g_hpet.available()) {
+        const uint64_t elapsed = after - before;
+        TEST_ASSERT_GE(elapsed, k5ms);                      // at least the requested duration
+        TEST_ASSERT_TRUE(elapsed < 500ull * 1'000'000ull);  // sanity: < 500 ms (no hang)
+    }
+}
+
+void test_sys_nanosleep_zero_returns_immediately() {
+    cinux::syscall::ktimespec req{0, 0};
+    int64_t                   r = cinux::syscall::do_nanosleep_kernel(&req, nullptr);
+    TEST_ASSERT_EQ(r, 0);
+}
+
+void test_sys_nanosleep_bad_nsec_rejected() {
+    cinux::syscall::ktimespec req{0, 1'000'000'000LL};  // nsec == 1e9 is out of range
+    int64_t                   r = cinux::syscall::do_nanosleep_kernel(&req, nullptr);
+    TEST_ASSERT_EQ(r, -cinux::kEinval);
+}
+
 }  // namespace test_musl_syscalls
 
 // ============================================================
@@ -518,6 +556,11 @@ extern "C" void run_syscall_tests() {
     RUN_TEST(test_musl_syscalls::test_sys_clock_gettime_bad_clock_rejected);
     RUN_TEST(test_musl_syscalls::test_sys_clock_gettime_realtime_uses_rtc);
     RUN_TEST(test_musl_syscalls::test_sys_clock_gettime_realtime_ahead_of_monotonic);
+
+    // F-ECO batch 3: nanosleep.
+    RUN_TEST(test_musl_syscalls::test_sys_nanosleep_sleeps_requested_duration);
+    RUN_TEST(test_musl_syscalls::test_sys_nanosleep_zero_returns_immediately);
+    RUN_TEST(test_musl_syscalls::test_sys_nanosleep_bad_nsec_rejected);
 
     TEST_SUMMARY();
 }
