@@ -27,7 +27,10 @@ SRC="$WORK/musl-$MUSL_VER"
 TARBALL="$WORK/musl-$MUSL_VER.tar.gz"
 
 install_linux_uapi_headers() {
-    if [ -f "$SYSROOT/include/linux/kd.h" ] && [ -f "$SYSROOT/include/asm/ioctls.h" ]; then
+    if [ -f "$SYSROOT/include/linux/kd.h" ] &&
+        [ -f "$SYSROOT/include/asm/ioctls.h" ] &&
+        [ -f "$SYSROOT/include/mtd/mtd-user.h" ] &&
+        [ -f "$SYSROOT/include/scsi/sg.h" ]; then
         return
     fi
 
@@ -37,8 +40,11 @@ install_linux_uapi_headers() {
     fi
 
     mkdir -p "$SYSROOT/include"
-    cp -a /usr/include/linux "$SYSROOT/include/"
-    cp -a /usr/include/asm-generic "$SYSROOT/include/"
+    for dir in linux asm-generic mtd scsi sound video drm rdma; do
+        if [ -d "/usr/include/$dir" ]; then
+            cp -a "/usr/include/$dir" "$SYSROOT/include/"
+        fi
+    done
 
     if [ -d /usr/include/asm ]; then
         cp -a /usr/include/asm "$SYSROOT/include/"
