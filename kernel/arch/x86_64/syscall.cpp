@@ -25,6 +25,8 @@
 #include "kernel/syscall/sys_creat.hpp"
 #include "kernel/syscall/sys_creds.hpp"
 #include "kernel/syscall/sys_dmesg.hpp"
+#include "kernel/syscall/sys_dup.hpp"        // F-ECO batch 4
+#include "kernel/syscall/sys_fcntl.hpp"      // F-ECO batch 4
 #include "kernel/syscall/sys_execve.hpp"
 #include "kernel/syscall/sys_exit.hpp"
 #include "kernel/syscall/sys_fork.hpp"
@@ -111,6 +113,9 @@ void register_builtin_handlers() {
     syscall_register(SyscallNr::SYS_fstat, sys_fstat);
     syscall_register(SyscallNr::SYS_lstat, sys_stat);  // F-ECO b1: lstat = stat (no symlinks yet)
     syscall_register(SyscallNr::SYS_pipe, sys_pipe);
+    syscall_register(SyscallNr::SYS_dup, sys_dup);      // F-ECO batch 4
+    syscall_register(SyscallNr::SYS_dup2, sys_dup2);    // F-ECO batch 4
+    syscall_register(SyscallNr::SYS_fcntl, sys_fcntl);  // F-ECO batch 4
     syscall_register(SyscallNr::SYS_getpid, sys_getpid);
     syscall_register(SyscallNr::SYS_getppid, sys_getppid);
     syscall_register(SyscallNr::SYS_fork, sys_fork);

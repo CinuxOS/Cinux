@@ -49,4 +49,7 @@ target_sources(big_kernel_common PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_utimensat.cpp
     # F-ECO batch 3: nanosleep (sleep).
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_nanosleep.cpp
+    # F-ECO batch 4: dup / dup2 / fcntl (sh + pipe + redirect 质变点).
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_dup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sys_fcntl.cpp
 )

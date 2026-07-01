@@ -33,13 +33,18 @@
 #include "kernel/drivers/hpet/hpet.hpp"  // monotonic_ns (nanosleep duration check)
 #include "kernel/drivers/tty/console_tty.hpp"
 #include "kernel/errno.hpp"
+#include "kernel/fs/file.hpp"  // FDTable / File (F-ECO batch 4 dup/fcntl tests)
+#include "kernel/fs/vfs_mount.hpp"
 #include "kernel/proc/process.hpp"
 #include "kernel/proc/signal.hpp"
 #include "kernel/syscall/sys_clock_gettime.hpp"
+#include "kernel/syscall/sys_dup.hpp"  // F-ECO batch 4
 #include "kernel/syscall/sys_exit.hpp"
+#include "kernel/syscall/sys_fcntl.hpp"  // F-ECO batch 4
 #include "kernel/syscall/sys_ioctl.hpp"
 #include "kernel/syscall/sys_iov.hpp"
 #include "kernel/syscall/sys_nanosleep.hpp"  // F-ECO batch 3
+#include "kernel/syscall/sys_pipe.hpp"       // do_pipe_kernel (batch 4 dup round-trip)
 #include "kernel/syscall/sys_write.hpp"
 #include "kernel/syscall/sys_yield.hpp"
 #include "kernel/syscall/syscall_nums.hpp"
@@ -507,6 +512,157 @@ void test_sys_nanosleep_bad_nsec_rejected() {
 }  // namespace test_musl_syscalls
 
 // ============================================================
+// F-ECO batch 4: dup / dup2 / fcntl (sh + pipe + redirect)
+// ============================================================
+
+namespace test_feco_b4 {
+
+// Mirror sys_fcntl.cpp's private Linux cmd constants.
+static constexpr uint64_t kFDupfd    = 0;
+static constexpr uint64_t kFGetfd    = 1;
+static constexpr uint64_t kFSetfd    = 2;
+static constexpr uint64_t kFGetfl    = 3;
+static constexpr uint64_t kFdCloexec = 1;
+
+/// Close every fd this batch's tests create.  The test kernel's current task
+/// shares one FDTable across the whole suite, so an fd left open here pollutes a
+/// later test (e.g. test_vfs_close_invalid_fd asserts close(42)==-1; a dup2 to
+/// fd 42 here would flip it to 0).  Closing frees the slot.
+static void cleanup_fds(const int* begin, const int* end) {
+    for (const int* p = begin; p != end; ++p) {
+        if (*p >= 0) {
+            cinux::fs::current_fd_table().close(*p);
+        }
+    }
+}
+
+void test_sys_dup_shares_inode_and_writes() {
+    // dup'd fd resolves to the SAME inode -> writing via it delivers bytes to
+    // the pipe, readable via the original read end (proof by round-trip, the
+    // "redirect works" property sh relies on).  Pipe I/O is driven directly via
+    // the inode ops with KERNEL buffers (sys_write needs a user ptr the ring0
+    // test kernel cannot supply -- same is_user_vaddr constraint as nanosleep).
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    int wfd = fds[1];
+    int rfd = fds[0];
+
+    int64_t nfd = cinux::syscall::sys_dup(static_cast<uint64_t>(wfd), 0, 0, 0, 0, 0);
+    TEST_ASSERT_GE(nfd, 0);
+    TEST_ASSERT_NE(nfd, static_cast<int64_t>(wfd));
+
+    cinux::fs::FDTable& tbl = cinux::fs::current_fd_table();
+    cinux::fs::File*    wf  = tbl.get(wfd);
+    cinux::fs::File*    nf  = tbl.get(static_cast<int>(nfd));
+    TEST_ASSERT_NOT_NULL(wf);
+    TEST_ASSERT_NOT_NULL(nf);
+    TEST_ASSERT_EQ(nf->inode, wf->inode);  // independent File, SAME inode
+
+    uint8_t msg = 'A';
+    auto    wr  = nf->inode->ops->write(nf->inode, 0, &msg, 1);
+    TEST_ASSERT_TRUE(wr.ok());
+    TEST_ASSERT_EQ(*wr, 1);
+    uint8_t          got = 0;
+    cinux::fs::File* rf  = tbl.get(rfd);
+    auto             rr  = rf->inode->ops->read(rf->inode, 0, &got, 1);
+    TEST_ASSERT_TRUE(rr.ok());
+    TEST_ASSERT_EQ(*rr, 1);
+    TEST_ASSERT_EQ(got, 'A');
+
+    int to_close[] = {rfd, wfd, static_cast<int>(nfd)};
+    cleanup_fds(to_close, to_close + 3);
+}
+
+void test_sys_dup2_redirects_to_target() {
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    constexpr int target = 42;
+    int64_t       rr     = cinux::syscall::sys_dup2(static_cast<uint64_t>(fds[1]),
+                                                    static_cast<uint64_t>(target), 0, 0, 0, 0);
+    TEST_ASSERT_EQ(rr, static_cast<int64_t>(target));
+
+    cinux::fs::FDTable& tbl = cinux::fs::current_fd_table();
+    cinux::fs::File*    wf  = tbl.get(fds[1]);
+    cinux::fs::File*    tf  = tbl.get(target);
+    TEST_ASSERT_EQ(tf->inode, wf->inode);  // target now IS the pipe write end
+
+    uint8_t msg = 'Z';
+    auto    wr  = tf->inode->ops->write(tf->inode, 0, &msg, 1);
+    TEST_ASSERT_TRUE(wr.ok());
+    TEST_ASSERT_EQ(*wr, 1);
+    uint8_t got = 0;
+    auto    rd  = tbl.get(fds[0])->inode->ops->read(tbl.get(fds[0])->inode, 0, &got, 1);
+    TEST_ASSERT_TRUE(rd.ok());
+    TEST_ASSERT_EQ(*rd, 1);
+    TEST_ASSERT_EQ(got, 'Z');
+
+    int to_close[] = {fds[0], fds[1], target};
+    cleanup_fds(to_close, to_close + 3);
+}
+
+void test_sys_dup2_same_fd_is_noop() {
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    int64_t rr = cinux::syscall::sys_dup2(static_cast<uint64_t>(fds[1]),
+                                          static_cast<uint64_t>(fds[1]), 0, 0, 0, 0);
+    TEST_ASSERT_EQ(rr, static_cast<int64_t>(fds[1]));  // valid + same -> no-op
+    int to_close[] = {fds[0], fds[1]};
+    cleanup_fds(to_close, to_close + 2);
+}
+
+void test_sys_fcntl_cloexec_roundtrip() {
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    int wfd = fds[1];
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(wfd, kFGetfd, 0, 0, 0, 0), 0);  // default: no cloexec
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(wfd, kFSetfd, kFdCloexec, 0, 0, 0), 0);
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(wfd, kFGetfd, 0, 0, 0, 0),
+                   static_cast<int64_t>(kFdCloexec));
+    cinux::fs::File* f = cinux::fs::current_fd_table().get(wfd);
+    TEST_ASSERT_TRUE(f->cloexec);
+    int to_close[] = {fds[0], fds[1]};
+    cleanup_fds(to_close, to_close + 2);
+}
+
+void test_sys_fcntl_fdupfd() {
+    // F_DUPFD duplicates to the lowest free fd >= arg (same FDTable::dup path
+    // as sys_dup, but the fcntl switch case + min-fd handling is its own path).
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    constexpr int min_fd = 30;
+    int64_t       nfd    = cinux::syscall::sys_fcntl(fds[1], kFDupfd, min_fd, 0, 0, 0);
+    TEST_ASSERT_GE(nfd, static_cast<int64_t>(min_fd));
+    cinux::fs::File* src = cinux::fs::current_fd_table().get(fds[1]);
+    cinux::fs::File* dup = cinux::fs::current_fd_table().get(static_cast<int>(nfd));
+    TEST_ASSERT_EQ(dup->inode, src->inode);
+    int to_close[] = {fds[0], fds[1], static_cast<int>(nfd)};
+    cleanup_fds(to_close, to_close + 3);
+}
+
+void test_sys_fcntl_getfl_access_mode() {
+    int     fds[2] = {-1, -1};
+    int64_t r      = cinux::syscall::do_pipe_kernel(cinux::fs::current_fd_table(), fds);
+    TEST_ASSERT_EQ(r, 0);
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(fds[1], kFGetfl, 0, 0, 0, 0), 1);  // O_WRONLY
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(fds[0], kFGetfl, 0, 0, 0, 0), 0);  // O_RDONLY
+    int to_close[] = {fds[0], fds[1]};
+    cleanup_fds(to_close, to_close + 2);
+}
+
+void test_sys_dup_fcntl_bad_fd() {
+    TEST_ASSERT_EQ(cinux::syscall::sys_dup(999, 0, 0, 0, 0, 0), -cinux::kEbadf);
+    TEST_ASSERT_EQ(cinux::syscall::sys_dup2(999, 50, 0, 0, 0, 0), -cinux::kEbadf);
+    TEST_ASSERT_EQ(cinux::syscall::sys_fcntl(999, kFGetfd, 0, 0, 0, 0), -cinux::kEbadf);
+}
+
+}  // namespace test_feco_b4
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -561,6 +717,15 @@ extern "C" void run_syscall_tests() {
     RUN_TEST(test_musl_syscalls::test_sys_nanosleep_sleeps_requested_duration);
     RUN_TEST(test_musl_syscalls::test_sys_nanosleep_zero_returns_immediately);
     RUN_TEST(test_musl_syscalls::test_sys_nanosleep_bad_nsec_rejected);
+
+    // F-ECO batch 4: dup / dup2 / fcntl (sh + pipe + redirect).
+    RUN_TEST(test_feco_b4::test_sys_dup_shares_inode_and_writes);
+    RUN_TEST(test_feco_b4::test_sys_dup2_redirects_to_target);
+    RUN_TEST(test_feco_b4::test_sys_dup2_same_fd_is_noop);
+    RUN_TEST(test_feco_b4::test_sys_fcntl_cloexec_roundtrip);
+    RUN_TEST(test_feco_b4::test_sys_fcntl_fdupfd);
+    RUN_TEST(test_feco_b4::test_sys_fcntl_getfl_access_mode);
+    RUN_TEST(test_feco_b4::test_sys_dup_fcntl_bad_fd);
 
     TEST_SUMMARY();
 }
