@@ -35,6 +35,21 @@ fi
 
 mkdir -p "$WORK" "$(dirname "$OUT")"
 
+# build-musl.sh patches musl-gcc with -fno-link-libatomic for GCC versions that
+# inject -latomic_asneeded on static links.  Older CI GCCs do not recognize that
+# option and fail during BusyBox compile-only steps.  Keep the cached sysroot
+# intact; use a local wrapper copy without the flag when this host compiler does
+# not accept it.
+if ! printf 'int x;\n' | "${REALGCC:-gcc}" -fno-link-libatomic -x c -c -o /tmp/cinux-gcc-flag-test.o - >/dev/null 2>&1; then
+    if grep -q -- '-fno-link-libatomic' "$CC"; then
+        SANITIZED_CC="$WORK/musl-gcc-no-link-libatomic"
+        sed 's/ -fno-link-libatomic//g' "$CC" >"$SANITIZED_CC"
+        chmod +x "$SANITIZED_CC"
+        CC="$SANITIZED_CC"
+        echo "[build-busybox] host gcc lacks -fno-link-libatomic; using sanitized musl-gcc wrapper"
+    fi
+fi
+
 if [ ! -f "$TARBALL" ]; then
     echo "[build-busybox] downloading busybox-$BUSYBOX_VER..."
     curl -fsSL "https://busybox.net/downloads/busybox-$BUSYBOX_VER.tar.bz2" -o "$TARBALL"
