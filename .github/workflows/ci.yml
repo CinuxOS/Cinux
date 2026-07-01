@@ -112,7 +112,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get install -y qemu-system-x86 e2fsprogs python3
+        run: sudo apt-get install -y qemu-system-x86 e2fsprogs python3 linux-libc-dev
 
       - name: Cache musl sysroot (ring-3 smoke)
         # P3: smoke is ON by default, so CI must build the musl user binaries
@@ -189,7 +189,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get install -y qemu-system-x86 e2fsprogs python3 curl bzip2
+        run: sudo apt-get install -y qemu-system-x86 e2fsprogs python3 curl bzip2 linux-libc-dev
 
       - name: Cache musl sysroot
         uses: actions/cache@v4
