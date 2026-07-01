@@ -40,6 +40,7 @@ enum class SyscallNr : uint64_t {
     SYS_readv          = 19,  ///< read into multiple buffers (musl __stdio_read)
     SYS_writev         = 20,  ///< write from multiple buffers (musl __stdio_write)
     SYS_pipe           = 22,
+    SYS_select         = 23,  ///< select (F8-M5 real poll/select)
     SYS_yield          = 24,  ///< sched_yield
     SYS_shmget         = 29,  ///< get a shared memory segment (F8-M4)
     SYS_shmat          = 30,  ///< attach a shared memory segment (F8-M4)
