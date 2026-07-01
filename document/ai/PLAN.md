@@ -2,6 +2,13 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
+## ✅ F-ECO 批8 小件（getgroups + setgroups）— 收官 2026-07-01（外包 worktree `feat/outsource-f-eco-b8-groups`，从集成线 `9208751`，cherry-pick 回 `feat/f-eco-b2-vfs-syscalls`（`dc3fdc1`）零冲突，两 leg 1062/0）
+
+> busybox 试金石第八刀小件：`id`/`newgrp` 的补充组。login/su 复杂件留后续。
+> **实现**：Task +groups[32]+ngroups（放 fpu_state **后**——其 offset 384 被 static_assert 钉死，插前会推后）。sys_getgroups(115)/setgroups(116)+do_ 变体放 sys_creds 家族；**do_ 取 Task* 参数**（测试内核 current()==null，F3-M4 GOTCHA#22）。getgroups size==0→count / size<count→EINVAL；setgroups root-only + count>32→EINVAL。
+> **机制测 3**（栈 Task 直驱 do_）：getgroups count/array 精确匹配 + too-small→EINVAL + setgroups too-many→EINVAL + **非 root→EPERM**。
+> **GOTCHA**：fpu_state offset 钉死→新 Task 成员须放其后；测试内核 current()==null→creds do_ 须取 Task*。follow-up：login/su（复杂件）/ CAP_SETGID 能力位 / 文件 group 权限查 supplementary groups。详见 [note](../notes/2026-07-01-f-eco-b8-groups.md)。push/PR 归用户。
+
 ## ✅ F-ECO 批7（socket syscall 全对齐）— 收官 2026-07-01（外包 worktree `feat/outsource-f-eco-b7-socket`，从集成线 `9683e38`，cherry-pick 回 `feat/f-eco-b2-vfs-syscalls`（`ec5ced6` 批7a + `2d2c9cc` 批7b）零冲突，两 leg 1059/0）
 
 > busybox 试金石第七刀：socket(2) 族 14 个 syscall 全对齐（F7-M6 的 7 + 批7a 的 accept4/setsockopt/getsockopt + 批7b 的 getsockname/getpeername/shutdown/socketpair）。applet 端到端验收留 CI。
