@@ -2,6 +2,14 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
+## 🔄 GCC 自举主线 — 批1 tmpfs（F6-M4）✅ commit `6656096`（分支 `feat/f12-gcc-selfhost` 从 main `5c03f85`，**主 checkout 串行，不拉 worktree**，未 push）
+
+> 目标：`gcc hello.c -o hello && ./hello` 在 CinuxOS 跑通——从「能跑别人二进制」到「能编自己二进制」。ABI 底子已验（busybox -O2 14/14 试金石过）。4 批串行：批1 tmpfs → 批2 mount/umount2+挂 /tmp → 批3 sys_access+init PID1 → 批4 GCC 工具链装盘 + gcc hello.c。
+> **批1（✅）**：TmpFs 内存型虚拟 FS（[tmpfs.hpp](../../kernel/fs/tmpfs/tmpfs.hpp) / [tmpfs.cpp](../../kernel/fs/tmpfs/tmpfs.cpp)）——第一个**运行时改写自身目录结构**的 FS（DevFS/ProcFS mount 时定死）。`TmpNode` 堆分配内嵌 Inode（`fs_private` 指回 node，延用 DevFs 招）+ 单向兄弟链表子节点（无上限）+ 可扩容堆缓冲（4KB 对齐增长 + gap 零填）+ 单 per-FS Spinlock。`TmpFileOps`(read/write/stat) + `TmpDirOps`(readdir/create/mkdir/unlink/stat)。lookup 多段 walk（仿 ext2，syscall `split_pathname` 拆 `sub/file` 故 tmpfs 须自 walk）。`is_page_cacheable` 默认 false → 内容直连 `ops->read/write`，不进磁盘 PageCache（已核实 sys_read/sys_write 路由）。
+> **机制测 9（直驱 InodeOps，栈局部 TmpFs 不碰全局 mount/fd 表）**：mount+root / create-write-read / append+offset / **grow 过 4KB 边界 + gap 零填** / mkdir-readdir-nested walk / stat(file+dir) / unlink(file+空目录+非空拒绝) / 负测(NotFound+AlreadyExists+穿文件)。
+> **GOTCHA**：① 头 `class TmpNode;` 与 cpp 匿名 ns `struct TmpNode` 不匹配（-Wmismatched-tags）→ `struct` 定义放 cinux::fs 非匿名 ns；② Error 枚举无 DirectoryNotEmpty → unlink 非空目录返 IOError（→kEio 非 ENOTEMPTY，契约满足，真 errno 留 follow-up）；③ inode 无 refcount，unlink 立即释放（依赖 close-before-unlink，GCC 模式如此）。⭐**验证避让**：本机多 AI 会话共用 `-vnc :0` 互杀 QEMU，验证临时切 `-vnc :5` 跑完还原（非提交）。
+> 验证：两 leg run-kernel-test-all 绿（leg1 单核 + leg2 -smp2）+ TmpFs 9/9 + busybox 14/14 两 leg + 零 FAIL；post-format 单核 1070/0。详见 [note](../notes/2026-07-01-f6-m4-b1-tmpfs.md)。push/PR 归用户。
+
 ## ✅ F-ECO 批8 小件（getgroups + setgroups）— 收官 2026-07-01（外包 worktree `feat/outsource-f-eco-b8-groups`，从集成线 `9208751`，cherry-pick 回 `feat/f-eco-b2-vfs-syscalls`（`dc3fdc1`）零冲突，两 leg 1062/0）
 
 > busybox 试金石第八刀小件：`id`/`newgrp` 的补充组。login/su 复杂件留后续。
