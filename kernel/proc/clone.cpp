@@ -129,6 +129,7 @@ void cow_clone_address_space(Task* parent, Task* child) {
 
 __attribute__((noinline)) int clone(uint64_t flags, uint64_t stack, uint64_t parent_tid,
                                     uint64_t child_tid, uint64_t tls) {
+    KernelForkCalleeRegs caller_regs = capture_kernel_fork_callee_regs();
     auto* parent = Scheduler::current();
     if (parent == nullptr) {
         cinux::lib::kprintf("[PROC] clone: no current task\n");
@@ -262,7 +263,7 @@ __attribute__((noinline)) int clone(uint64_t flags, uint64_t stack, uint64_t par
 
         uint64_t frame_base = reinterpret_cast<uint64_t>(__builtin_frame_address(0));
         prepare_kernel_fork_context(child, current_rsp, current_rsp + full_stack_used,
-                                    child_stack_start, frame_base);
+                                    child_stack_start, frame_base, caller_regs);
     }
 
     // ---- CRUX: patch the child's user-RSP to the provided thread stack ----
