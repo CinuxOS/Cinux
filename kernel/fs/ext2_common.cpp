@@ -486,7 +486,11 @@ bool Ext2::chmod(uint32_t ino, uint32_t mode) {
     }
     // Keep the file-type bits (high nibble), replace only the low 12 perms.
     d.i_mode = static_cast<uint16_t>((d.i_mode & EXT2_S_IFMT) | (mode & 0x0FFF));
-    return write_disk_inode(ino, d);
+    if (!write_disk_inode(ino, d)) {
+        return false;
+    }
+    invalidate_cached_inode(ino);  // stat() reads the cache; drop the stale copy.
+    return true;
 }
 
 bool Ext2::chown(uint32_t ino, uint32_t uid, uint32_t gid) {
@@ -502,7 +506,11 @@ bool Ext2::chown(uint32_t ino, uint32_t uid, uint32_t gid) {
     if (gid != 0xFFFFFFFFu) {
         d.i_gid = static_cast<uint16_t>(gid);
     }
-    return write_disk_inode(ino, d);
+    if (!write_disk_inode(ino, d)) {
+        return false;
+    }
+    invalidate_cached_inode(ino);  // stat() reads the cache; drop the stale copy.
+    return true;
 }
 
 bool Ext2::utimensat(uint32_t ino, uint64_t atime_sec, uint32_t /*atime_nsec*/, uint64_t mtime_sec,
@@ -514,7 +522,20 @@ bool Ext2::utimensat(uint32_t ino, uint64_t atime_sec, uint32_t /*atime_nsec*/, 
     // rev-0 inode only stores seconds; nsec is intentionally dropped.
     d.i_atime = static_cast<uint32_t>(atime_sec);
     d.i_mtime = static_cast<uint32_t>(mtime_sec);
-    return write_disk_inode(ino, d);
+    if (!write_disk_inode(ino, d)) {
+        return false;
+    }
+    invalidate_cached_inode(ino);  // stat() reads the cache; drop the stale copy.
+    return true;
+}
+
+void Ext2::invalidate_cached_inode(uint32_t ino) {
+    for (uint32_t i = 0; i < EXT2_INODE_CACHE_SIZE; ++i) {
+        if (inode_cache_[i].in_use && inode_cache_[i].ino == ino) {
+            inode_cache_[i].in_use = false;
+            return;
+        }
+    }
 }
 
 int64_t Ext2::readlink(uint32_t ino, char* buf, uint64_t buf_size) {

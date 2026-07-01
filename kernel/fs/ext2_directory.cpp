@@ -635,6 +635,9 @@ bool Ext2::link(uint32_t parent_ino, const char* name, uint32_t name_len, uint32
         return false;
     }
 
+    // stat(target) reads the cached disk_inode; the nlink bump above is on disk
+    // only until we drop the stale cache entry.
+    invalidate_cached_inode(target_ino);
     return true;
 }
 

@@ -368,6 +368,12 @@ private:
      */
     void populate_vfs_inode(Ext2CachedInode& cached);
 
+    /// Drop the cached entry for @p ino (if present) so the next lookup re-reads
+    /// disk. Call after a metadata write (chmod/chown/utimensat/link): stat()
+    /// serves the cached disk_inode, so a write that skips this stays stale
+    /// until the slot is evicted.
+    void invalidate_cached_inode(uint32_t ino);
+
     // ============================================================
     // Path resolution
     // ============================================================
