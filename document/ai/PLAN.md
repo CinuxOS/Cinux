@@ -2,7 +2,7 @@
 
 > Tier 3（批级，易变）。单一事实源（批级）。全树见 `ROADMAP.md`，铁律见 `DIRECTIVES.md`。
 
-## 🔄 GCC 自举主线 — 批1 tmpfs ✅ ＋ shm merge ✅ ＋ 批2 mount/tmp ✅ ＋ 批3a sys_access ✅ ＋ 批3b busybox init PID1 ✅（已合 main PR#61 `0b82e1b`）→ **批4 GCC 工具链(glibc 动态)** 🔄（分支 `feat/b4-gcc-toolchain`，B0 内核 glibc 兼容 ✅）
+## 🔄 GCC 自举主线 — 批1 tmpfs ✅ ＋ shm merge ✅ ＋ 批2 mount/tmp ✅ ＋ 批3a sys_access ✅ ＋ 批3b busybox init PID1 ✅（已合 main PR#61 `0b82e1b`）→ **批4-a GCC 工具链(glibc 动态)as+ld 自举 ✅**（分支 `feat/b4-gcc-toolchain`，6 commit c7c1ff5→270daf0，未 push）
 
 > **进度**：批1 tmpfs `6656096` ✅ ＋ shm merge `2a86b13` ✅ ＋ 批2 mount/umount2+/tmp `b078fef` ✅ ＋ 批3a sys_access `25271b3` ✅。目标 `gcc hello.c -o hello && ./hello`。4 批串行：批1 ✅ → 批2 ✅ → **批3 sys_access✅ + init PID1(focus)** → 批4 GCC 工具链装盘 + gcc hello.c。
 > **批3a（✅ `25271b3`）**：sys_access(21) 文件权限检查。`access_granted()` 标准 Unix 判定(owner/group/other 三元 + root 旁路:R/W 直通、X 需 exec 位)→ 可复用给 F6 check_permission / login。机制测 2:root 旁路 R/W + 0644 文件 X_OK 拒(-EACCES)+ 缺路径→ENOENT + 坏 mode→EINVAL。
