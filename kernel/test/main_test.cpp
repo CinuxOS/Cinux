@@ -160,7 +160,8 @@ static constexpr uintptr_t BOOT_INFO_PHYS = 0x7000;
 // The harness compiles when EITHER smoke flag is on; the static /hello and
 // dynamic /hello-dyn phases are gated independently inside, so each can run
 // alone (CINUX_MUSL_HELLO_SMOKE / CINUX_MUSL_DYN_SMOKE).
-#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) || defined(CINUX_BUSYBOX_SMOKE)
+#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) ||                            \
+    defined(CINUX_BUSYBOX_SMOKE) || defined(CINUX_GCC_TOOLCHAIN)
 static int g_unit_test_failures = 0;
 
 static void musl_hello_smoke_entry() {
@@ -484,13 +485,55 @@ static void musl_hello_smoke_entry() {
     bool busybox_ok = true;  // busybox phase compiled out
 #    endif
 
+#    ifdef CINUX_GCC_TOOLCHAIN
+    // B4-B2: glibc-dynamic `as --version` -- the FIRST glibc dynamic ELF on
+    // Cinux. Gate on exit==0; the serial log shows whether the glibc ldso came
+    // up (PT_INTERP load + GOT/PLT relocate + TLS via arch_prctl + AT_RANDOM
+    // canary). cc1 (the big ELF) + `as hello.s -o hello.o` land in later batches.
+    bool as_ok = false;
+    {
+        int child_pid = cinux::proc::fork(cinux::proc::g_pid_alloc);
+        if (child_pid == 0) {
+            auto* child        = cinux::proc::Scheduler::current();
+            child->addr_space  = new cinux::mm::AddressSpace();
+            const char* argv[] = {"/usr/bin/as", "--version", nullptr};
+            const char* envp[] = {nullptr};
+            cinux::proc::launch_user_program("/usr/bin/as", argv, envp);
+            cinux::proc::Scheduler::exit_current();  // unreachable
+        }
+        int     kstatus = 0;
+        int64_t reap    = 0;
+        for (int spins = 0; spins < 50'000'000; ++spins) {
+            cinux::proc::WaitpidResult wr =
+                cinux::proc::waitpid(child_pid, &kstatus, 1, cinux::proc::g_pid_alloc);
+            if (wr == cinux::proc::WaitpidResult::Ok) {
+                reap = child_pid;
+                break;
+            }
+            if (wr != cinux::proc::WaitpidResult::NotExited) {
+                reap = static_cast<int64_t>(wr);
+                break;
+            }
+            cinux::proc::Scheduler::yield();
+        }
+        as_ok = (reap > 0 && kstatus == 0);
+        cinux::lib::kprintf("[B4-B2] glibc as --version %s (status=%d reap=%lld)\n",
+                            as_ok ? "PASS" : "FAIL", kstatus, static_cast<long long>(reap));
+    }
+#    else
+    bool as_ok = true;  // glibc toolchain smoke compiled out
+#    endif
+
     int exit_code =
-        (g_unit_test_failures > 0 || !hello_ok || !dyn_ok || !forktest_ok || !busybox_ok) ? 1 : 0;
+        (g_unit_test_failures > 0 || !hello_ok || !dyn_ok || !forktest_ok || !busybox_ok || !as_ok)
+            ? 1
+            : 0;
     __asm__ volatile("outl %0, $0xf4" : : "a"(exit_code));
     while (1)
         __asm__ volatile("cli; hlt");
 }
-#endif  // CINUX_MUSL_HELLO_SMOKE || CINUX_MUSL_DYN_SMOKE || CINUX_BUSYBOX_SMOKE
+#endif  // CINUX_MUSL_HELLO_SMOKE || CINUX_MUSL_DYN_SMOKE || CINUX_BUSYBOX_SMOKE ||
+        // CINUX_GCC_TOOLCHAIN
 
 // ============================================================
 // F-VERIFY M3-2: AP wake + AP-side mechanism readback
@@ -513,7 +556,8 @@ static bool ap_test_selfcheck(uint32_t cpu_id) {
     r.star   = cinux::arch::read_msr(0xC0000081);
     r.sfmask = cinux::arch::read_msr(0xC0000084);
     r.magic  = cinux::arch::kApSelfcheckMagic;
-#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) || defined(CINUX_BUSYBOX_SMOKE)
+#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) ||                            \
+    defined(CINUX_BUSYBOX_SMOKE) || defined(CINUX_GCC_TOOLCHAIN)
     // Smoke will run the scheduler -- let this AP participate (cross-core CoW).
     return true;
 #else
@@ -903,7 +947,8 @@ extern "C" void kernel_main() {
         cinux::lib::kprintf("\n[TEST] ALL TESTS PASSED (exit code %d)\n", exit_code);
     }
 
-#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) || defined(CINUX_BUSYBOX_SMOKE)
+#if defined(CINUX_MUSL_HELLO_SMOKE) || defined(CINUX_MUSL_DYN_SMOKE) ||                            \
+    defined(CINUX_BUSYBOX_SMOKE) || defined(CINUX_GCC_TOOLCHAIN)
     // F10-M1 batch 6 / F10-M2 batch 3: enter the real scheduler and run the musl
     // The worker task signals QEMU exit itself (isa-debug-exit), so control
     // does not return here.  CI builds without the flag take the normal path.
