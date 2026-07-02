@@ -72,7 +72,10 @@ int main(void) {
     return 0;
 }
 EOF
-gcc -S -o "$ROOT/hello.s" /tmp/cinux_hello.c
+# -fno-pie: CinuxOS only loads non-PIE ET_EXEC so far (F10-M2 hello-dyn), so emit
+# a non-PIE assembly (absolute addressing, links with crt1.o + crtbegin.o under
+# ld -no-pie). PIE main (Scrt1/crtbeginS, ET_DYN) is a follow-up with ELF-base ASLR.
+gcc -S -fno-pie -o "$ROOT/hello.s" /tmp/cinux_hello.c
 cp /tmp/cinux_hello.c "$ROOT/hello.c"
 rm -f /tmp/cinux_hello.c
 
