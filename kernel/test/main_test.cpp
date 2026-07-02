@@ -486,6 +486,50 @@ static void musl_hello_smoke_entry() {
 #    endif
 
 #    ifdef CINUX_GCC_TOOLCHAIN
+    // B4-C1: glibc-dynamic `cc1 --version` -- the BIGGEST ELF on Cinux (~47 MB,
+    // 9 DT_NEEDED: libisl/libmpc/libmpfr/libgmp/libm + as/ld's libz/libzstd/
+    // libc/ldso).  cc1 is the GCC C front end; --version needs no headers, so it
+    // isolates "can CinuxOS run cc1 at all" (heaviest ldso bring-up + TLS + glibc
+    // -O2 constructors) from the header/compile question (B4-C2).  Gate on
+    // exit==0 like the as smoke; stdout is not console-wired so do not gate on
+    // the version text.
+    static constexpr const char* kCc1Path =
+        "/usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/cc1";
+    bool cc1_ok = false;
+    {
+        int child_pid = cinux::proc::fork(cinux::proc::g_pid_alloc);
+        if (child_pid == 0) {
+            auto* child        = cinux::proc::Scheduler::current();
+            child->addr_space  = new cinux::mm::AddressSpace();
+            const char* argv[] = {kCc1Path, "--version", nullptr};
+            const char* envp[] = {nullptr};
+            cinux::proc::launch_user_program(kCc1Path, argv, envp);
+            cinux::proc::Scheduler::exit_current();  // unreachable
+        }
+        int     kstatus = 0;
+        int64_t reap    = 0;
+        for (int spins = 0; spins < 50'000'000; ++spins) {
+            cinux::proc::WaitpidResult wr =
+                cinux::proc::waitpid(child_pid, &kstatus, 1, cinux::proc::g_pid_alloc);
+            if (wr == cinux::proc::WaitpidResult::Ok) {
+                reap = child_pid;
+                break;
+            }
+            if (wr != cinux::proc::WaitpidResult::NotExited) {
+                reap = static_cast<int64_t>(wr);
+                break;
+            }
+            cinux::proc::Scheduler::yield();
+        }
+        cc1_ok = (reap > 0 && kstatus == 0);
+        cinux::lib::kprintf("[B4-C1] glibc cc1 --version %s (status=%d reap=%lld)\n",
+                            cc1_ok ? "PASS" : "FAIL", kstatus, static_cast<long long>(reap));
+    }
+#    else
+    bool cc1_ok = true;  // cc1 smoke compiled out
+#    endif
+
+#    ifdef CINUX_GCC_TOOLCHAIN
     // B4-B2: glibc-dynamic `as --version` -- the FIRST glibc dynamic ELF on
     // Cinux. Gate on exit==0; the serial log shows whether the glibc ldso came
     // up (PT_INTERP load + GOT/PLT relocate + TLS via arch_prctl + AT_RANDOM
@@ -596,7 +640,7 @@ static void musl_hello_smoke_entry() {
     // ld; may share a root with mmap demand-paging on large arenas). Gate on
     // as + ./hello (the self-host proof), not ld's own exit.
     int exit_code = (g_unit_test_failures > 0 || !hello_ok || !dyn_ok || !forktest_ok ||
-                     !busybox_ok || !as_ok || !gcc_hello_ok)
+                     !busybox_ok || !cc1_ok || !as_ok || !gcc_hello_ok)
                         ? 1
                         : 0;
     __asm__ volatile("outl %0, $0xf4" : : "a"(exit_code));

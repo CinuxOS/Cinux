@@ -53,6 +53,15 @@ done
 # libgcc_s.so.1 is a GCC runtime ld may pull; ensure present.
 cp_lib /usr/lib/libgcc_s.so.1
 
+# --- B4-C1: cc1 (GCC C front end, ~47 MB) + its .so closure.  cc1 pulls
+#     libisl/libmpc/libmpfr/libgmp/libm on top of as/ld's libz/libzstd/libc.
+#     `cc1 --version` needs NO headers, so this stages the binary + deps only;
+#     /usr/include (the C headers, ~250 MB) lands with B4-C2 (actual compile). ---
+cp -a "$GCC_INSTALL/cc1" "$ROOT$GCC_INSTALL/cc1"
+ldd "$GCC_INSTALL/cc1" 2>/dev/null | grep '=> /' | awk '{print $3}' | sort -u | while read -r lib; do
+    cp_lib "$lib"
+done
+
 # --- link-time crt + libc + libgcc (ld needs these when linking hello.o -> hello) ---
 for f in crt1.o Scrt1.o crti.o crtn.o; do
     cp -a "/usr/lib/$f" "$ROOT/usr/lib/" 2>/dev/null || true
