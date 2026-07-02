@@ -91,6 +91,23 @@ gcc -S -fno-pie -o "$ROOT/hello.s" /tmp/cinux_hello.c
 cp /tmp/cinux_hello.c "$ROOT/hello.c"
 rm -f /tmp/cinux_hello.c
 
+# --- B4-C2: hello.c's #include closure (computed live via gcc -H) so cc1 can
+#     actually compile hello.c on Cinux.  The closure is tiny (~25 files,
+#     ~200 KB); stage exactly those at their absolute paths instead of all
+#     ~249 MB of /usr/include.  cc1's built-in include search (/usr/include +
+#     $GCC_INSTALL/include) then resolves <stdio.h> et al.  [ -f ] filters the
+#     "Multiple include guards ..." non-path line gcc -H appends. ---
+gcc -H -fsyntax-only -fno-pie "$ROOT/hello.c" 2>&1 >/dev/null \
+    | sed -E 's/^[. ]+//' | grep -v '^$' | sort -u | while read -r h; do
+    [ -f "$h" ] || continue
+    install -Dm0644 "$h" "$ROOT$h"
+done
+# GCC's cc1 implicitly pre-includes <stdc-predef.h> before the C source (and
+# glibc features.h:518 includes it explicitly).  gcc -H does NOT list this
+# implicit pre-include, so the closure above misses it; without it cc1 fails
+# at features.h:518 "fatal error: stdc-predef.h: No such file or directory".
+[ -f /usr/include/stdc-predef.h ] && install -Dm0644 /usr/include/stdc-predef.h "$ROOT/usr/include/stdc-predef.h"
+
 echo "[extract] GCC toolchain subset staged at $ROOT"
 du -sh "$ROOT"
 echo "[extract] binaries:"; ls "$ROOT/usr/bin"

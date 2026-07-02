@@ -521,6 +521,29 @@ void handle_pf(InterruptFrame* frame) {
     const char* reserved = (err & 0x08) ? ", reserved bits" : "";
     const char* fetch    = (err & 0x10) ? ", instruction fetch" : "";
 
+    // User-mode fault we could NOT resolve (genuine write to a read-only page,
+    // reserved bits, instruction fetch on an NX page, ...): deliver SIGSEGV and
+    // keep the kernel alive.  Linux kills the offending process here -- it does
+    // NOT panic.  The panic below is reserved for KERNEL-mode faults (a real
+    // kernel bug worth halting on).  Without this, a corrupt user pointer that
+    // writes a RO page (the ld-on-cc1-.o saga: a dangling VMA backing inode
+    // served a zero page; ld executed `00 00` = add %al,(%rax) -> write-protect)
+    // took the whole kernel down instead of just SIGSEGV-ing the linker.
+    if ((err & 0x04) != 0) {
+        auto* task = cinux::proc::Scheduler::current();
+        if (task != nullptr) {
+            klog_error(
+                "segfault: tid=%u '%s' rip=%p rsp=%p addr=%p err=0x%lx (%s %s%s%s) "
+                "-- unresolvable user #PF, sending SIGSEGV",
+                static_cast<unsigned>(task->tid), task->name ? task->name : "(null)",
+                reinterpret_cast<void*>(frame->rip), reinterpret_cast<void*>(frame->rsp),
+                reinterpret_cast<void*>(fault_addr), static_cast<unsigned long>(err), access,
+                present, reserved, fetch);
+            cinux::proc::signal_send(task, cinux::proc::Signal::kSigsegv);
+            return;
+        }
+    }
+
     panic(frame, "#PF", 14, "Page Fault: %s %s %s%s%s @ CR2=%p", present, access, mode, reserved,
           fetch, reinterpret_cast<void*>(fault_addr));
 }

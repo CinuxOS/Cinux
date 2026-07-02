@@ -121,8 +121,27 @@ Inode* Ext2::get_cached_inode(uint32_t ino) {
         }
     }
 
-    // Cache full -- evict slot 1+ (slot 0 is always root)
-    uint32_t evict = 1 + (ino % (EXT2_INODE_CACHE_SIZE - 1));
+    // Cache full -- evict an UNREFERENCED slot.  A blind hash pick could reuse
+    // a slot whose inode is still mapped (VMA) or open (fd): those hold an
+    // inode_ref, and the VMA/File would keep dereferencing the slot after it is
+    // repopulated for a different ino -- a use-after-free that served the wrong
+    // file's bytes (the ld/cc1-.o crash root cause).  Slot 0 is root -- never
+    // evict.  Scan for a slot that is either free or cached-but-unreferenced
+    // (refcount == 0); only if every slot is pinned do we fall back to the hash
+    // slot with a warning (cache-capacity issue, not silent corruption).
+    uint32_t evict = 0;
+    for (uint32_t i = 1; i < EXT2_INODE_CACHE_SIZE; ++i) {
+        if (!inode_cache_[i].in_use || inode_cache_[i].vfs_inode.refcount == 0) {
+            evict = i;
+            break;
+        }
+    }
+    if (evict == 0) {
+        evict = 1 + (ino % (EXT2_INODE_CACHE_SIZE - 1));
+        cinux::lib::kprintf(
+            "[EXT2] inode cache exhausted (all slots pinned); evicting ino=%lu slot=%u\n",
+            static_cast<unsigned long>(inode_cache_[evict].ino), evict);
+    }
 
     inode_cache_[evict].in_use = false;
     if (!read_disk_inode(ino, inode_cache_[evict].disk_inode)) {

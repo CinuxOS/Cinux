@@ -233,6 +233,30 @@ cinux::lib::ErrorOr<int64_t> Ext2FileOps::write(Inode* inode, uint64_t offset, c
     return static_cast<int64_t>(total_written);
 }
 
+cinux::lib::ErrorOr<void> Ext2FileOps::truncate(Inode* inode, uint64_t new_size) {
+    if (inode == nullptr || inode->fs_private == nullptr) {
+        return cinux::lib::Error::InvalidArgument;
+    }
+    auto*      cached = static_cast<Ext2CachedInode*>(inode->fs_private);
+    Ext2Inode& disk   = cached->disk_inode;
+
+    // Shrink-only (O_TRUNC -> 0, or ftruncate down).  Growing would need
+    // zero-fill + block alloc; not required for O_TRUNC.  We do NOT free the
+    // now-orphaned data blocks (hobby-os leak, not a correctness issue: reads
+    // stop at i_size, and a later write reuses the same blocks via
+    // get_or_alloc_block).  Cache invalidation is unnecessary too: read_bytes
+    // gates on inode->size (so post-truncate reads return 0 past new_size), and
+    // the next write's invalidate_range refreshes pages with the new bytes.
+    if (new_size < disk.i_size) {
+        disk.i_size = static_cast<uint32_t>(new_size);
+        if (!ext2_.write_disk_inode(static_cast<uint32_t>(inode->ino), disk)) {
+            return cinux::lib::Error::IOError;
+        }
+    }
+    inode->size = disk.i_size;
+    return {};
+}
+
 cinux::lib::ErrorOr<void> Ext2FileOps::stat(const Inode* inode, struct stat* st) {
     if (inode == nullptr || inode->fs_private == nullptr || st == nullptr) {
         return cinux::lib::Error::InvalidArgument;
